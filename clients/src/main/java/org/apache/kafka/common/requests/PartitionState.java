@@ -19,10 +19,13 @@ import java.util.Set;
 
 public class PartitionState {
     public final int controllerEpoch;
+    // leader副本id，实际是Leader所在的BrokerId
     public final int leader;
     public final int leaderEpoch;
+    // ISR集合，其中保存的是ISR集合中副本所在的BrokerId
     public final List<Integer> isr;
     public final int zkVersion;
+    // AR集合，其中保存的是AR集合中副本所在的BrokerId
     public final Set<Integer> replicas;
 
     public PartitionState(int controllerEpoch, int leader, int leaderEpoch, List<Integer> isr, int zkVersion, Set<Integer> replicas) {
