@@ -665,7 +665,10 @@ class KafkaApis(val requestChannel: RequestChannel,
     topicMetadata.headOption.getOrElse(createGroupMetadataTopic())
   }
 
+  // 完成对MetadataCache的查询
+  // 同时根据配置以及Topic的名称决定是否自动创建未知的topic
   private def getTopicMetadata(topics: Set[String], securityProtocol: SecurityProtocol, errorUnavailableEndpoints: Boolean): Seq[MetadataResponse.TopicMetadata] = {
+    // 查询MetadataCache
     val topicResponses = metadataCache.getTopicMetadata(topics, securityProtocol, errorUnavailableEndpoints)
     if (topics.isEmpty || topicResponses.size == topics.size) {
       topicResponses
@@ -674,6 +677,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       val responsesForNonExistentTopics = nonExistentTopics.map { topic =>
         if (topic == TopicConstants.GROUP_METADATA_TOPIC_NAME) {
           createGroupMetadataTopic()
+          // 根据配置决定是否调用createTopic
         } else if (config.autoCreateTopicsEnable) {
           createTopic(topic, config.numPartitions, config.defaultReplicationFactor)
         } else {
@@ -694,6 +698,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     val topics =
       // Handle old metadata request logic. Version 0 has no way to specify "no topics".
+    // 对MetadataRequest（version 0）的处理
       if (requestVersion == 0) {
         if (metadataRequest.topics() == null || metadataRequest.topics().isEmpty)
           metadataCache.getAllTopics()
@@ -706,6 +711,7 @@ class KafkaApis(val requestChannel: RequestChannel,
           metadataRequest.topics.asScala.toSet
       }
 
+    // 权限验证
     var (authorizedTopics, unauthorizedTopics) =
       topics.partition(topic => authorize(request.session, Describe, new Resource(Topic, topic)))
 
@@ -728,6 +734,8 @@ class KafkaApis(val requestChannel: RequestChannel,
     // In version 0, we returned an error when brokers with replicas were unavailable,
     // while in higher versions we simply don't include the broker in the returned broker list
     val errorUnavailableEndpoints = requestVersion == 0
+
+    // 查询MetadataCache得到指定Topic信息
     val topicMetadata =
       if (authorizedTopics.isEmpty)
         Seq.empty[MetadataResponse.TopicMetadata]
@@ -743,6 +751,8 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     val responseHeader = new ResponseHeader(request.header.correlationId)
 
+    // 按照MetadataResponse格式创建响应
+    // 向RequestChannel中添加响应
     val responseBody = new MetadataResponse(
       brokers.map(_.getNode(request.securityProtocol)).asJava,
       metadataCache.getControllerId.getOrElse(MetadataResponse.NO_CONTROLLER_ID),

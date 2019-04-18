@@ -20,7 +20,7 @@ package kafka.server
 import kafka.cluster.BrokerEndPoint
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.utils.Time
-
+// follower副本与leader副本同步的功能
 class ReplicaFetcherManager(brokerConfig: KafkaConfig, replicaMgr: ReplicaManager, metrics: Metrics, time: Time, threadNamePrefix: Option[String] = None)
         extends AbstractFetcherManager("ReplicaFetcherManager on broker " + brokerConfig.brokerId,
                                        "Replica", brokerConfig.numReplicaFetchers) {

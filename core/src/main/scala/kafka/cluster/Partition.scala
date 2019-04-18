@@ -294,9 +294,11 @@ class Partition(val topic: String,
   def updateReplicaLogReadResult(replicaId: Int, logReadResult: LogReadResult) {
     getReplica(replicaId) match {
       case Some(replica) =>
+        // 更新Follower副本的状态
         replica.updateLogReadResult(logReadResult)
         // check if we need to expand ISR to include this replica
         // if it is not in the ISR yet
+        // 检测ISR是否扩张，并与zookeeper进行同步
         maybeExpandIsr(replicaId)
 
         debug("Recorded replica %d log end offset (LEO) position %d for partition %s."

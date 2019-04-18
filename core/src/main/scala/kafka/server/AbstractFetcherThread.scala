@@ -48,6 +48,8 @@ abstract class AbstractFetcherThread(name: String,
   type REQ <: FetchRequest
   type PD <: PartitionData
 
+  // 维护了TopicAndPartition与PartitionFetchState之间对应关系
+  //    PartitionFetchState记录了对应分区的同步offset位置以及同步状态
   private val partitionMap = new mutable.HashMap[TopicAndPartition, PartitionFetchState] // a (topic, partition) -> partitionFetchState map
   private val partitionMapLock = new ReentrantLock
   private val partitionMapCond = partitionMapLock.newCondition()
@@ -83,27 +85,36 @@ abstract class AbstractFetcherThread(name: String,
     fetcherLagStats.unregister()
   }
 
+  // 核心代码：根据partitionMap中维护的信息生成FetchRequest
+  //          如果没有需要进行同步的分区，则会退避一会后重试
+  //          如果有需要发送的FetchRequest，则执行processFetchRequest方法
   override def doWork() {
 
     val fetchRequest = inLock(partitionMapLock) {
+      // 创建FetchRequest请求
       val fetchRequest = buildFetchRequest(partitionMap)
       if (fetchRequest.isEmpty) {
         trace("There are no active partitions. Back off for %d ms before sending a fetch request".format(fetchBackOffMs))
+        // 没有FetchRequest，则退避一段时间后重试
         partitionMapCond.await(fetchBackOffMs, TimeUnit.MILLISECONDS)
       }
       fetchRequest
     }
 
     if (!fetchRequest.isEmpty)
+      // 发送FetchRequest并处理FetchResponse
       processFetchRequest(fetchRequest)
   }
 
+  // 定义了发送FetchRequest以及处理FetchResponse的步骤
+  //    这些步骤由子类ReplicaFetchRequest具体实现
   private def processFetchRequest(fetchRequest: REQ) {
     val partitionsWithError = new mutable.HashSet[TopicAndPartition]
     var responseData: Map[TopicAndPartition, PD] = Map.empty
 
     try {
       trace("Issuing to broker %d of fetch request %s".format(sourceBroker.id, fetchRequest))
+      // 发送FetchRequest并等待FetchResponse，fetch是抽象方法
       responseData = fetch(fetchRequest)
     } catch {
       case t: Throwable =>
@@ -112,34 +123,42 @@ abstract class AbstractFetcherThread(name: String,
           inLock(partitionMapLock) {
             partitionsWithError ++= partitionMap.keys
             // there is an error occurred while fetching partitions, sleep a while
+            // 线程退避一段时间
             partitionMapCond.await(fetchBackOffMs, TimeUnit.MILLISECONDS)
           }
         }
     }
     fetcherStats.requestRate.mark()
 
+    // 处理FetchResponse
     if (responseData.nonEmpty) {
       // process fetched data
       inLock(partitionMapLock) {
 
+        // 遍历每个TopicAndPartition对应的响应信息
         responseData.foreach { case (topicAndPartition, partitionData) =>
           val TopicAndPartition(topic, partitionId) = topicAndPartition
           partitionMap.get(topicAndPartition).foreach(currentPartitionFetchState =>
             // we append to the log if the current offset is defined and it is the same as the offset requested during fetch
+            // 冲发送FetchRequest到收到FetchResponse这段同步时间内，Offset并未发生变化
             if (fetchRequest.offset(topicAndPartition) == currentPartitionFetchState.offset) {
               Errors.forCode(partitionData.errorCode) match {
                 case Errors.NONE =>
                   try {
+                    // 获取返回的消息集合
                     val messages = partitionData.toByteBufferMessageSet
-                    val validBytes = messages.validBytes
+                    val validBytes = messages.validBytes  // 验证
+                    // 获取返回的最后一条消息的offset
                     val newOffset = messages.shallowIterator.toSeq.lastOption match {
                       case Some(m: MessageAndOffset) => m.nextOffset
                       case None => currentPartitionFetchState.offset
                     }
+                    // 更新Fetch状态
                     partitionMap.put(topicAndPartition, new PartitionFetchState(newOffset))
                     fetcherLagStats.getAndMaybePut(topic, partitionId).lag = Math.max(0L, partitionData.highWatermark - newOffset)
                     fetcherStats.byteRate.mark(validBytes)
                     // Once we hand off the partition data to the subclass, we can't mess with it any more in this thread
+                    // 将从leader副本获取的消息集合追加到Log中
                     processPartitionData(topicAndPartition, currentPartitionFetchState.offset, partitionData)
                   } catch {
                     case ime: CorruptRecordException =>
@@ -153,8 +172,11 @@ abstract class AbstractFetcherThread(name: String,
                         .format(topic, partitionId, currentPartitionFetchState.offset), e)
                   }
                 case Errors.OFFSET_OUT_OF_RANGE =>
+                  // 若follower副本请求的offset超出了Leader的LEO，返回此错误码
                   try {
+                    // 生成新的offset
                     val newOffset = handleOffsetOutOfRange(topicAndPartition)
+                    // 更新Fetch状态
                     partitionMap.put(topicAndPartition, new PartitionFetchState(newOffset))
                     error("Current offset %d for partition [%s,%d] out of range; reset offset to %d"
                       .format(currentPartitionFetchState.offset, topic, partitionId, newOffset))
@@ -164,6 +186,7 @@ abstract class AbstractFetcherThread(name: String,
                       partitionsWithError += topicAndPartition
                   }
                 case _ =>
+                  // 其他错误码，进行收集后，由handlePartitionWithErrors方法处理
                   if (isRunning.get) {
                     error("Error for partition [%s,%d] to broker %d:%s".format(topic, partitionId, sourceBroker.id,
                       partitionData.exception.get))
@@ -177,21 +200,25 @@ abstract class AbstractFetcherThread(name: String,
 
     if (partitionsWithError.nonEmpty) {
       debug("handling partitions with error for %s".format(partitionsWithError))
+      // 抽象方法
       handlePartitionsWithErrors(partitionsWithError)
     }
   }
 
+  // 对partitionMap字段进行增加
   def addPartitions(partitionAndOffsets: Map[TopicAndPartition, Long]) {
     partitionMapLock.lockInterruptibly()
     try {
       for ((topicAndPartition, offset) <- partitionAndOffsets) {
         // If the partitionMap already has the topic/partition, then do not update the map with the old offset
+        // 检测分区是否已经存在
         if (!partitionMap.contains(topicAndPartition))
           partitionMap.put(
             topicAndPartition,
             if (PartitionTopicInfo.isOffsetInvalid(offset)) new PartitionFetchState(handleOffsetOutOfRange(topicAndPartition))
             else new PartitionFetchState(offset)
           )}
+      // 唤醒当前fetcher线程，进行同步操作
       partitionMapCond.signalAll()
     } finally partitionMapLock.unlock()
   }
@@ -201,14 +228,18 @@ abstract class AbstractFetcherThread(name: String,
     try {
       for (partition <- partitions) {
         partitionMap.get(partition).foreach (currentPartitionFetchState =>
+          // 检测分区同步状态
           if (currentPartitionFetchState.isActive)
+          // 将分区对应的同步状态由激活状态设置为延时状态，延时时长为delay毫秒
             partitionMap.put(partition, new PartitionFetchState(currentPartitionFetchState.offset, new DelayedItem(delay)))
         )
       }
+      // 唤醒fetcher线程
       partitionMapCond.signalAll()
     } finally partitionMapLock.unlock()
   }
 
+  // 对partitionMap进行删除
   def removePartitions(topicAndPartitions: Set[TopicAndPartition]) {
     partitionMapLock.lockInterruptibly()
     try {
