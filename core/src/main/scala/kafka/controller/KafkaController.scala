@@ -46,12 +46,16 @@ import java.util.concurrent.locks.ReentrantLock
 import kafka.server._
 import kafka.common.TopicAndPartition
 
+// 可以看做是ZK数据的缓存
 class ControllerContext(val zkUtils: ZkUtils,
                         val zkSessionTimeout: Int) {
+  // 维护Controller leader与集群其他broker之间的网络连接，是管理整个集群的基础
   var controllerChannelManager: ControllerChannelManager = null
   val controllerLock: ReentrantLock = new ReentrantLock()
+  // 正在关闭的brokerID集合
   var shuttingDownBrokerIds: mutable.Set[Int] = mutable.Set.empty
   val brokerShutdownLock: Object = new Object
+  // Controller的年代信息，初始为0，每次重新选举新的
   var epoch: Int = KafkaController.InitialControllerEpoch - 1
   var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion - 1
   var allTopics: Set[String] = Set.empty
@@ -156,25 +160,37 @@ object KafkaController extends Logging {
   }
 }
 
+// 组织并分装其他组件，对外提供API
+// 每个Broker启动时创建KafkaController对象，去zk注册，第一个注册的就是leader，其他的是follower
+// 它负责重新选举leader副本，管理分区的重新分配，isr集合变化之后，通知所有broker更新其MetadataCache信息
 class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerState: BrokerState, time: Time, metrics: Metrics, threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   this.logIdent = "[Controller " + config.brokerId + "]: "
   private var isRunning = true
   private val stateChangeLogger = KafkaController.stateChangeLogger
   val controllerContext = new ControllerContext(zkUtils, config.zkSessionTimeoutMs)
+  // 管理集群中所有partition状态的状态机
   val partitionStateMachine = new PartitionStateMachine(this)
+  // 管理集群中所有副本状态的状态机
   val replicaStateMachine = new ReplicaStateMachine(this)
+  // 主要用于ControllerLeader的选举
   private val controllerElector = new ZookeeperLeaderElector(controllerContext, ZkUtils.ControllerPath, onControllerFailover,
     onControllerResignation, config.brokerId)
   // have a separate scheduler for the controller to be able to start and stop independently of the
   // kafka server
   private val autoRebalanceScheduler = new KafkaScheduler(1)
+  // 用于对指定topic进行删除
   var deleteTopicManager: TopicDeletionManager = null
+
+  // 多种leader副本的选举策略
   val offlinePartitionSelector = new OfflinePartitionLeaderSelector(controllerContext, config)
   private val reassignedPartitionLeaderSelector = new ReassignedPartitionLeaderSelector(controllerContext)
   private val preferredReplicaPartitionLeaderSelector = new PreferredReplicaPartitionLeaderSelector(controllerContext)
   private val controlledShutdownPartitionLeaderSelector = new ControlledShutdownLeaderSelector(controllerContext)
+
+  // 向broker批量发送请求
   private val brokerRequestBatch = new ControllerBrokerRequestBatch(this)
 
+  // zk上的监听器
   private val partitionReassignedListener = new PartitionsReassignedListener(this)
   private val preferredReplicaElectionListener = new PreferredReplicaElectionListener(this)
   private val isrChangeNotificationListener = new IsrChangeNotificationListener(this)
