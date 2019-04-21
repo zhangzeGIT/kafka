@@ -55,16 +55,24 @@ class ControllerContext(val zkUtils: ZkUtils,
   // 正在关闭的brokerID集合
   var shuttingDownBrokerIds: mutable.Set[Int] = mutable.Set.empty
   val brokerShutdownLock: Object = new Object
-  // Controller的年代信息，初始为0，每次重新选举新的
+  // Controller的年代信息，初始为0，每次重新选举新的Leader Controller，epoch字段值就会增加1
   var epoch: Int = KafkaController.InitialControllerEpoch - 1
+  // 年代信息的ZK版本，初始为0
   var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion - 1
+  // 整个集群全部topic的名称
   var allTopics: Set[String] = Set.empty
+  // 记录每个分区的AR集合
   var partitionReplicaAssignment: mutable.Map[TopicAndPartition, Seq[Int]] = mutable.Map.empty
+  // 记录每个分区leader副本所在的brokerID，ISR集合以及controller_epoch等信息
   var partitionLeadershipInfo: mutable.Map[TopicAndPartition, LeaderIsrAndControllerEpoch] = mutable.Map.empty
+  // 记录了正在重新分配副本的分区，集合value封装了新分配的AR集合信息以及用于监听ISR集合变化的listener
   val partitionsBeingReassigned: mutable.Map[TopicAndPartition, ReassignedPartitionsContext] = new mutable.HashMap
+  // 记录了正在进行“优先副本”选举的分区
   val partitionsUndergoingPreferredReplicaElection: mutable.Set[TopicAndPartition] = new mutable.HashSet
 
+  // 记录了当前可用的broker集合
   private var liveBrokersUnderlying: Set[Broker] = Set.empty
+  // 记录了当前可用的brokerId集合
   private var liveBrokerIdsUnderlying: Set[Int] = Set.empty
 
   // setter
@@ -74,12 +82,14 @@ class ControllerContext(val zkUtils: ZkUtils,
   }
 
   // getter
+  // 排除shuttingDownBrokerIds集合
   def liveBrokers = liveBrokersUnderlying.filter(broker => !shuttingDownBrokerIds.contains(broker.id))
   def liveBrokerIds = liveBrokerIdsUnderlying.filter(brokerId => !shuttingDownBrokerIds.contains(brokerId))
 
   def liveOrShuttingDownBrokerIds = liveBrokerIdsUnderlying
   def liveOrShuttingDownBrokers = liveBrokersUnderlying
 
+  // 获取指定broker中存在有副本的分区集合
   def partitionsOnBroker(brokerId: Int): Set[TopicAndPartition] = {
     partitionReplicaAssignment
       .filter { case(topicAndPartition, replicas) => replicas.contains(brokerId) }
@@ -87,6 +97,7 @@ class ControllerContext(val zkUtils: ZkUtils,
       .toSet
   }
 
+  // 获取指定broker集合中保存的所有副本
   def replicasOnBrokers(brokerIds: Set[Int]): Set[PartitionAndReplica] = {
     brokerIds.map { brokerId =>
       partitionReplicaAssignment
@@ -96,6 +107,7 @@ class ControllerContext(val zkUtils: ZkUtils,
     }.flatten.toSet
   }
 
+  // 获取指定topic的所有副本
   def replicasForTopic(topic: String): Set[PartitionAndReplica] = {
     partitionReplicaAssignment
       .filter { case(topicAndPartition, replicas) => topicAndPartition.topic.equals(topic) }
@@ -106,15 +118,18 @@ class ControllerContext(val zkUtils: ZkUtils,
     }.flatten.toSet
   }
 
+  // 获取指定topic的所有分区
   def partitionsForTopic(topic: String): collection.Set[TopicAndPartition] = {
     partitionReplicaAssignment
       .filter { case(topicAndPartition, replicas) => topicAndPartition.topic.equals(topic) }.keySet
   }
 
+  // 获取所有可用broker中保存的副本
   def allLiveReplicas(): Set[PartitionAndReplica] = {
     replicasOnBrokers(liveBrokerIds)
   }
 
+  // 获取指定分区集合的副本
   def replicasForPartition(partitions: collection.Set[TopicAndPartition]): collection.Set[PartitionAndReplica] = {
     partitions.map { p =>
       val replicas = partitionReplicaAssignment(p)
@@ -122,6 +137,7 @@ class ControllerContext(val zkUtils: ZkUtils,
     }.flatten
   }
 
+  // 删除指定topic
   def removeTopic(topic: String) = {
     partitionLeadershipInfo = partitionLeadershipInfo.filter{ case (topicAndPartition, _) => topicAndPartition.topic != topic }
     partitionReplicaAssignment = partitionReplicaAssignment.filter{ case (topicAndPartition, _) => topicAndPartition.topic != topic }
