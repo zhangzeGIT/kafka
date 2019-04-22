@@ -41,16 +41,25 @@ import kafka.utils.CoreUtils._
  * 4. OfflinePartition    : If, after successful leader election, the leader for partition dies, then the partition
  *                          moves to the OfflinePartition state. Valid previous states are NewPartition/OnlinePartition
  */
+// 维护分区状态的状态机
+//    分区状态通过PartitionState接口定义
 class PartitionStateMachine(controller: KafkaController) extends Logging {
+  // ControllerContext对象，维护KafkaController的上下文信息
   private val controllerContext = controller.controllerContext
   private val controllerId = controller.config.brokerId
+  // ZK客户端
   private val zkUtils = controllerContext.zkUtils
+  // 记录每个分区对应的PartitionState状态
   private val partitionState: mutable.Map[TopicAndPartition, PartitionState] = mutable.Map.empty
+  // 向指定Broker批量发送请求
   private val brokerRequestBatch = new ControllerBrokerRequestBatch(controller)
   private val hasStarted = new AtomicBoolean(false)
+  // 默认的leader副本的选举类器
   private val noOpPartitionLeaderSelector = new NoOpLeaderSelector(controllerContext)
+  // ZK监听器
   private val topicChangeListener = new TopicChangeListener()
   private val deleteTopicsListener = new DeleteTopicsListener()
+  // 监听分区修改
   private val partitionModificationsListeners: mutable.Map[String, PartitionModificationsListener] = mutable.Map.empty
   private val stateChangeLogger = KafkaController.stateChangeLogger
 
@@ -61,12 +70,16 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * state transitions for partitions. Initializes the state of partitions by reading from zookeeper. Then triggers
    * the OnlinePartition state change for all new or offline partitions.
    */
+  // 启动会对集合进行初始化
   def startup() {
     // initialize partition state
+    // 初始化分区的状态
     initializePartitionState()
     // set started flag
+    // 标识PartitionStateMachine已启动
     hasStarted.set(true)
     // try to move partitions to online state
+    // 尝试将分区切换到OnlinePartition状态(将NewPartition和OfflinePartition两种状态切换)
     triggerOnlinePartitionStateChange()
 
     info("Started partition state machine with initial state -> " + partitionState.toString())
@@ -109,17 +122,21 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * This API invokes the OnlinePartition state change on all partitions in either the NewPartition or OfflinePartition
    * state. This is called on a successful controller election and on broker changes
    */
+  // 将OfflinePartition和NewPartition状态的分区转换成OnlinePartition
   def triggerOnlinePartitionStateChange() {
     try {
+      // 检查ControllerBrokerRequestBatch中的三个集合是否为空
       brokerRequestBatch.newBatch()
       // try to move all partitions in NewPartition or OfflinePartition state to OnlinePartition state except partitions
       // that belong to topics to be deleted
       for((topicAndPartition, partitionState) <- partitionState
           if(!controller.deleteTopicManager.isTopicQueuedUpForDeletion(topicAndPartition.topic))) {
         if(partitionState.equals(OfflinePartition) || partitionState.equals(NewPartition))
+          // 对指定分区进行状态切换，切换为OnlinePartition
           handleStateChange(topicAndPartition.topic, topicAndPartition.partition, OnlinePartition, controller.offlinePartitionSelector,
                             (new CallbackBuilder).build)
       }
+      // 发送请求
       brokerRequestBatch.sendRequestsToBrokers(controller.epoch)
     } catch {
       case e: Throwable => error("Error while moving some partitions to the online state", e)
@@ -136,6 +153,7 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * @param partitions   The list of partitions that need to be transitioned to the target state
    * @param targetState  The state that the partitions should be moved to
    */
+  // 对指定集合循环调用handleStateChange方法进行状态转换
   def handleStateChanges(partitions: Set[TopicAndPartition], targetState: PartitionState,
                          leaderSelector: PartitionLeaderSelector = noOpPartitionLeaderSelector,
                          callbacks: Callbacks = (new CallbackBuilder).build) {
@@ -175,17 +193,22 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * @param partition   The partition for which the state transition is invoked
    * @param targetState The end state that the partition should be moved to
    */
+  // 管理分区状态的核心方法
+  // 第三个参数：用来选举leader副本的partitionLeaderSelector对象，也就是选举规则
   private def handleStateChange(topic: String, partition: Int, targetState: PartitionState,
                                 leaderSelector: PartitionLeaderSelector,
                                 callbacks: Callbacks) {
     val topicAndPartition = TopicAndPartition(topic, partition)
+    // 检测当前PartitionStateMachine对象是否已经启动，只用controller leader才会启动
     if (!hasStarted.get)
       throw new StateChangeFailedException(("Controller %d epoch %d initiated state change for partition %s to %s failed because " +
                                             "the partition state machine has not started")
                                               .format(controllerId, controller.epoch, topicAndPartition, targetState))
+    // 从partitionState集合中获取分区的状态，如果没有对应的状态，则初始化NonExistentPartition
     val currState = partitionState.getOrElseUpdate(topicAndPartition, NonExistentPartition)
     try {
       targetState match {
+        // 将分区状态设置为NewPartition
         case NewPartition =>
           // pre: partition did not exist before this
           assertValidPreviousStates(topicAndPartition, List(NonExistentPartition), NewPartition)
@@ -198,11 +221,14 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
         case OnlinePartition =>
           assertValidPreviousStates(topicAndPartition, List(NewPartition, OnlinePartition, OfflinePartition), OnlinePartition)
           partitionState(topicAndPartition) match {
+            // 为分区初始化leader副本和ISR集合
             case NewPartition =>
               // initialize leader and isr path for new partition
               initializeLeaderAndIsrForPartition(topicAndPartition)
+            // 为分区选举新的leader副本
             case OfflinePartition =>
               electLeaderForPartition(topic, partition, leaderSelector)
+            // 为分区重新选举新的leader副本
             case OnlinePartition => // invoked when the leader needs to be re-elected
               electLeaderForPartition(topic, partition, leaderSelector)
             case _ => // should never come here since illegal previous states are checked above
@@ -239,18 +265,24 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * Invoked on startup of the partition's state machine to set the initial state for all existing partitions in
    * zookeeper
    */
+  // 每个分区初始化状态的依据是controllerContext.partitionLeadershipInfo中记录的leader副本信息和ISR集合信息
   private def initializePartitionState() {
+    // 遍历所有分区
     for((topicPartition, replicaAssignment) <- controllerContext.partitionReplicaAssignment) {
       // check if leader and isr path exists for partition. If not, then it is in NEW state
       controllerContext.partitionLeadershipInfo.get(topicPartition) match {
+        // 存在leader副本和ISR集合信息
         case Some(currentLeaderIsrAndEpoch) =>
           // else, check if the leader for partition is alive. If yes, it is in Online state, else it is in Offline state
           controllerContext.liveBrokerIds.contains(currentLeaderIsrAndEpoch.leaderAndIsr.leader) match {
+            // leader副本所在的broker可用，初始化为OnlinePartition状态
             case true => // leader is alive
               partitionState.put(topicPartition, OnlinePartition)
+            // leader副本所在的broker不可用，初始化为OfflineParition状态
             case false =>
               partitionState.put(topicPartition, OfflinePartition)
           }
+        // 没有leader副本和ISR集合的信息
         case None =>
           partitionState.put(topicPartition, NewPartition)
       }
@@ -272,10 +304,18 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * OfflinePartition state.
    * @param topicAndPartition   The topic/partition whose leader and isr path is to be initialized
    */
+  // 1、从controllerContext.partitionReplicaAssignment集合中选择第一个可用的副本作为leader副本，其余的构成ISR集合
+  // 2、将leader副本和ISR集合的信息写入到ZK
+  // 3、更新ControllerContext.partitionLeadershipInfo中缓存的leader副本，ISR集合等信息
+  // 4、将上述确定的leader副本，ISR集合，AR集合等信息天际到ControllerBrokerRequestBatch
+  //     封装LeaderAndIsrRequest发送给相关的Broker
   private def initializeLeaderAndIsrForPartition(topicAndPartition: TopicAndPartition) {
+    // 获取分区AR集合
     val replicaAssignment = controllerContext.partitionReplicaAssignment(topicAndPartition)
+    // 获取AR集合中可用副本集合
     val liveAssignedReplicas = replicaAssignment.filter(r => controllerContext.liveBrokerIds.contains(r))
     liveAssignedReplicas.size match {
+      // 没有任何副本，跑出异常
       case 0 =>
         val failMsg = ("encountered error during state change of partition %s from New to Online, assigned replicas are [%s], " +
                        "live brokers are [%s]. No assigned replica is alive.")
@@ -285,18 +325,23 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
       case _ =>
         debug("Live assigned replicas for partition %s are: [%s]".format(topicAndPartition, liveAssignedReplicas))
         // make the first replica in the list of assigned replicas, the leader
+        // 将可用的AR集合中的第一个副本选为leader
         val leader = liveAssignedReplicas.head
+        // 创建对象，其中ISR集合是可用AR集合，leaderEpoch和zkVersion初始化为零
         val leaderIsrAndControllerEpoch = new LeaderIsrAndControllerEpoch(new LeaderAndIsr(leader, liveAssignedReplicas.toList),
           controller.epoch)
         debug("Initializing leader and isr for partition %s to %s".format(topicAndPartition, leaderIsrAndControllerEpoch))
         try {
           zkUtils.createPersistentPath(
+            // 将LeaderAndIsrAndControllerEpoch中的信息转化成Json格式保存到zk
             getTopicPartitionLeaderAndIsrPath(topicAndPartition.topic, topicAndPartition.partition),
             zkUtils.leaderAndIsrZkData(leaderIsrAndControllerEpoch.leaderAndIsr, controller.epoch))
           // NOTE: the above write can fail only if the current controller lost its zk session and the new controller
           // took over and initialized this partition. This can happen if the current controller went into a long
           // GC pause
+          // 更新partitionLeadershipInfo中的记录
           controllerContext.partitionLeadershipInfo.put(topicAndPartition, leaderIsrAndControllerEpoch)
+          // 添加LeaderAndIsrRequest，待发送
           brokerRequestBatch.addLeaderAndIsrRequestForBrokers(liveAssignedReplicas, topicAndPartition.topic,
             topicAndPartition.partition, leaderIsrAndControllerEpoch, replicaAssignment)
         } catch {
@@ -320,6 +365,11 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
    * @param partition           The offline partition
    * @param leaderSelector      Specific leader selector (e.g., offline/reassigned/etc.)
    */
+  // 1.使用指定的PartitionLeaderSelector未分区选举新的Leader副本
+  // 2、将leader副本和ISR集合的信息写入到ZK
+  // 3、更新ControllerContext.paritionLeadershipInfo集合中缓存的leader副本，ISR集合等信息
+  // 4、将上述步骤中确定的leader副本，isr集合，AR集合添加到ControllerBrokerRequestBatch
+  //    之后封装成LeaderAndIsrRequest发送给相关的broker
   def electLeaderForPartition(topic: String, partition: Int, leaderSelector: PartitionLeaderSelector) {
     val topicAndPartition = TopicAndPartition(topic, partition)
     // handle leader election for the partitions whose leader is no longer alive
@@ -330,6 +380,7 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
       var newLeaderAndIsr: LeaderAndIsr = null
       var replicasForThisPartition: Seq[Int] = Seq.empty[Int]
       while(!zookeeperPathUpdateSucceeded) {
+        // 从ZK中获取分区当前的leader副本，ISR集合，ZKVersion等信息，如果不存在，则抛异常
         val currentLeaderIsrAndEpoch = getLeaderIsrAndEpochOrThrowException(topic, partition)
         val currentLeaderAndIsr = currentLeaderIsrAndEpoch.leaderAndIsr
         val controllerEpoch = currentLeaderIsrAndEpoch.controllerEpoch
@@ -342,7 +393,9 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
           throw new StateChangeFailedException(failMsg)
         }
         // elect new leader or throw exception
+        // 使用指定的PartitionLeaderSelector以及当前的LeaderAndIsr信息，选举新的leader副本和ISR集合
         val (leaderAndIsr, replicas) = leaderSelector.selectLeader(topicAndPartition, currentLeaderAndIsr)
+        // 将新的LeaderAndIsr信息转换成JSON格式保存到ZK中
         val (updateSucceeded, newVersion) = ReplicationUtils.updateLeaderAndIsr(zkUtils, topic, partition,
           leaderAndIsr, controller.epoch, currentLeaderAndIsr.zkVersion)
         newLeaderAndIsr = leaderAndIsr
@@ -352,11 +405,13 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
       }
       val newLeaderIsrAndControllerEpoch = new LeaderIsrAndControllerEpoch(newLeaderAndIsr, controller.epoch)
       // update the leader cache
+      // 更新partitionLeadershipInfo中的记录
       controllerContext.partitionLeadershipInfo.put(TopicAndPartition(topic, partition), newLeaderIsrAndControllerEpoch)
       stateChangeLogger.trace("Controller %d epoch %d elected leader %d for Offline partition %s"
                                 .format(controllerId, controller.epoch, newLeaderAndIsr.leader, topicAndPartition))
       val replicas = controllerContext.partitionReplicaAssignment(TopicAndPartition(topic, partition))
       // store new leader and isr info in cache
+      // 添加LeaderAndISRRequest，待发送
       brokerRequestBatch.addLeaderAndIsrRequestForBrokers(replicasForThisPartition, topic, partition,
         newLeaderIsrAndControllerEpoch, replicas)
     } catch {
@@ -427,6 +482,7 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
             val deletedTopics = controllerContext.allTopics -- currentChildren
             controllerContext.allTopics = currentChildren
 
+            // 从ZK的/brokers/topics/topic_name路径下加载每个Partition的AR集合
             val addedPartitionReplicaAssignment = zkUtils.getReplicaAssignmentForTopics(newTopics.toSeq)
             controllerContext.partitionReplicaAssignment = controllerContext.partitionReplicaAssignment.filter(p =>
               !deletedTopics.contains(p._1.topic))
@@ -531,9 +587,19 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
     }
   }
 }
-
+// 3->0：从zk中加载分区的AR集合到ControllerContext的partitionReplicaAssignment集合中
+// 0->1：首先将leader副本和ISR集合的信息写入到ZK中，这里会将分区的AR集合中第一个可用的副本选为leader
+//       ①之后向所有可用副本发送LeaderAndIsrRequest，指导这些副本进行L/F的角色切换
+//       ②并且向所有broker发送UpdateMetadataRequest来更新其上的MetadataCache
+// 1/2->1：为分区选择新的leader副本和ISR集合，并将结果写入zk，之后进行①②
+// 0/1->2：只进行状态转换，并没有其他的操作
+// 2->3：只进行状态转换，并没有其他操作
 sealed trait PartitionState { def state: Byte }
+// 分区创建后就处于此状态，此时分区可能已经被分配了AR集合，但是还没有指定leader副本和ISR集合
 case object NewPartition extends PartitionState { val state: Byte = 0 }
+// 分区成功选举出leader副本之后
 case object OnlinePartition extends PartitionState { val state: Byte = 1 }
+// 已经成功选举出分区的leader副本后，但leader副本发生宕机、或者新建的分区直接转换为此状态
 case object OfflinePartition extends PartitionState { val state: Byte = 2 }
+// 分区从来没有被创建或者分区创建之后又被删除了
 case object NonExistentPartition extends PartitionState { val state: Byte = 3 }

@@ -32,6 +32,8 @@ trait PartitionLeaderSelector {
    * @return The leader and isr request, with the newly selected leader and isr, and the set of replicas to receive
    * the LeaderAndIsrRequest.
    */
+  // 参数：需要进行Leader副本选举的分区，以及当前的Leader副本信息，ISR信息
+  // 返回值：选举之后新leader副本和新ISR集合信息，以及需要接受LeaderAndIsrRequest的broker
   def selectLeader(topicAndPartition: TopicAndPartition, currentLeaderAndIsr: LeaderAndIsr): (LeaderAndIsr, Seq[Int])
 
 }
@@ -50,13 +52,23 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
   extends PartitionLeaderSelector with Logging {
   this.logIdent = "[OfflinePartitionLeaderSelector]: "
 
+  // 根据currentLeaderAndIsr选举新的leader和ISR集合
+  //  1、如果ISR结婚中存在至少一个可用副本，则从ISR集合中选择新的leader副本，当前ISR集合为新的ISR集合
+  //  2、如果ISR集合中没有可用的副本且“unclean leader election”配置被禁用，那么就抛出异常
+  //  3、如果“unclean leader election”被开启，则从AR集合中选择新的leader副本和ISR集合
+  //  4、如果AAR集合中没有可用的副本，抛出异常
   def selectLeader(topicAndPartition: TopicAndPartition, currentLeaderAndIsr: LeaderAndIsr): (LeaderAndIsr, Seq[Int]) = {
+    // 获取分区AR集合
     controllerContext.partitionReplicaAssignment.get(topicAndPartition) match {
       case Some(assignedReplicas) =>
+        // 获取AR集合中可用的副本
         val liveAssignedReplicas = assignedReplicas.filter(r => controllerContext.liveBrokerIds.contains(r))
+        // 获取ISR集合中可用的副本
         val liveBrokersInIsr = currentLeaderAndIsr.isr.filter(r => controllerContext.liveBrokerIds.contains(r))
+        // 当前leaderEpoch
         val currentLeaderEpoch = currentLeaderAndIsr.leaderEpoch
         val currentLeaderIsrZkPathVersion = currentLeaderAndIsr.zkVersion
+        // 检测当前ISR集合中是否有可用副本
         val newLeaderAndIsr = liveBrokersInIsr.isEmpty match {
           case true =>
             // Prior to electing an unclean (i.e. non-ISR) leader, ensure that doing so is not disallowed by the configuration
@@ -70,6 +82,7 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
 
             debug("No broker in ISR is alive for %s. Pick the leader from the alive assigned replicas: %s"
               .format(topicAndPartition, liveAssignedReplicas.mkString(",")))
+            // 根据配置决定是否允许从AR集合中选择leader副本，不允许就抛异常
             liveAssignedReplicas.isEmpty match {
               case true =>
                 throw new NoReplicaOnlineException(("No replica for partition " +
@@ -80,16 +93,20 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
                 val newLeader = liveAssignedReplicas.head
                 warn("No broker in ISR is alive for %s. Elect leader %d from live brokers %s. There's potential data loss."
                      .format(topicAndPartition, newLeader, liveAssignedReplicas.mkString(",")))
+                // 新的ISR集合中只有leader副本自己
                 new LeaderAndIsr(newLeader, currentLeaderEpoch + 1, List(newLeader), currentLeaderIsrZkPathVersion + 1)
             }
+          // 从当前ISR集合中选取leader副本以及ISR集合
           case false =>
             val liveReplicasInIsr = liveAssignedReplicas.filter(r => liveBrokersInIsr.contains(r))
             val newLeader = liveReplicasInIsr.head
             debug("Some broker in ISR is alive for %s. Select %d from ISR %s to be the leader."
                   .format(topicAndPartition, newLeader, liveBrokersInIsr.mkString(",")))
+            // 构造LeaderAndIsr对象并返回，其中LeaderEpoch和zkVersion都加一
             new LeaderAndIsr(newLeader, currentLeaderEpoch + 1, liveBrokersInIsr.toList, currentLeaderIsrZkPathVersion + 1)
         }
         info("Selected new leader and ISR %s for offline partition %s".format(newLeaderAndIsr.toString(), topicAndPartition))
+        // 需要向AR集合中所有可用的副本发送LeaderAndIsrRequest
         (newLeaderAndIsr, liveAssignedReplicas)
       case None =>
         throw new NoReplicaOnlineException("Partition %s doesn't have replicas assigned to it".format(topicAndPartition))
@@ -200,6 +217,8 @@ class ControlledShutdownLeaderSelector(controllerContext: ControllerContext)
  * Essentially does nothing. Returns the current leader and ISR, and the current
  * set of replicas assigned to a given topic/partition.
  */
+// 没有进行leader选举，将currentLeaderAndIsr直接返回
+// LeaderAndIsrRequest的broker则是分区的AR集合
 class NoOpLeaderSelector(controllerContext: ControllerContext) extends PartitionLeaderSelector with Logging {
 
   this.logIdent = "[NoOpLeaderSelector]: "
