@@ -53,7 +53,7 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
   this.logIdent = "[OfflinePartitionLeaderSelector]: "
 
   // 根据currentLeaderAndIsr选举新的leader和ISR集合
-  //  1、如果ISR结婚中存在至少一个可用副本，则从ISR集合中选择新的leader副本，当前ISR集合为新的ISR集合
+  //  1、如果ISR集合中存在至少一个可用副本，则从ISR集合中选择新的leader副本，当前ISR集合为新的ISR集合
   //  2、如果ISR集合中没有可用的副本且“unclean leader election”配置被禁用，那么就抛出异常
   //  3、如果“unclean leader election”被开启，则从AR集合中选择新的leader副本和ISR集合
   //  4、如果AAR集合中没有可用的副本，抛出异常
