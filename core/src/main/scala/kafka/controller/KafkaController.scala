@@ -491,6 +491,15 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
    * the partition state machine will refresh our cache for us when performing leader election for all new/offline
    * partitions coming online.
    */
+  // 对故障broker的处理步骤：
+  //    1、将leader副本分布在故障broker上的分区转换为OfflinePartition状态
+  //    2、将offline状态的分区转化为OnlinePartition状态
+  //        此步骤会使用OfflinePartitionLeaderSelector为其选取Leader副本和ISR集合写入ZK
+  //        之后发送LeaderAndIsrRequest和UpdateMetadataRequest
+  //    3、将故障broker上的副本转换为OfflineReplica
+  //        此步骤会向故障broker发送StopReplicaRequest，从ISR集合中删除相关副本
+  //        并发送LeaderAndIsrRequest和UpdateMetadataRequest
+  //    4、
   def onBrokerFailure(deadBrokers: Seq[Int]) {
     info("Broker failure callback for %s".format(deadBrokers.mkString(",")))
     val deadBrokersThatWereShuttingDown =
@@ -532,9 +541,12 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
    * 2. Invokes the new partition callback
    * 3. Send metadata request with the new topic to all brokers so they allow requests for that topic to be served
    */
+  // 为每个新增的Topic注册一个PartitionModificationsListener
+  // 然后调用onNewPartitionCreation方法完成新增Topic的分区状态以及副本状态转换
   def onNewTopicCreation(topics: Set[String], newPartitions: Set[TopicAndPartition]) {
     info("New topic creation callback for %s".format(newPartitions.mkString(",")))
     // subscribe to partition changes
+    // 每个新增topic注册监听器
     topics.foreach(topic => partitionStateMachine.registerPartitionChangeListener(topic))
     onNewPartitionCreation(newPartitions)
   }
@@ -547,9 +559,13 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
    */
   def onNewPartitionCreation(newPartitions: Set[TopicAndPartition]) {
     info("New partition creation callback for %s".format(newPartitions.mkString(",")))
+    // 将所有指定的新增分区转化为NewPartition状态
     partitionStateMachine.handleStateChanges(newPartitions, NewPartition)
+    // 将指定分区的所有副本转化为NewReplica
     replicaStateMachine.handleStateChanges(controllerContext.replicasForPartition(newPartitions), NewReplica)
+    // 将所有指定的新增分区转化为OnlinePartition（状态转换并没有用到offlinePartitionSelector）
     partitionStateMachine.handleStateChanges(newPartitions, OnlinePartition, offlinePartitionSelector)
+    // 将指定分区所有副本都转化为NOnlineReplica状态
     replicaStateMachine.handleStateChanges(controllerContext.replicasForPartition(newPartitions), OnlineReplica)
   }
 

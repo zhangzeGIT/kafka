@@ -381,6 +381,8 @@ class ReplicaStateMachine(controller: KafkaController) extends Logging {
   /**
    * This is the zookeeper listener that triggers all the state transitions for a replica
    */
+  // 监听/brokers/ids节点下的子节点变化
+  // 主要负责处理broker的上线和故障下线
   class BrokerChangeListener() extends IZkChildListener with Logging {
     this.logIdent = "[BrokerChangeListener on Controller " + controller.config.brokerId + "]: "
     def handleChildChange(parentPath : String, currentBrokerList : java.util.List[String]) {
@@ -389,20 +391,27 @@ class ReplicaStateMachine(controller: KafkaController) extends Logging {
         if (hasStarted.get) {
           ControllerStats.leaderElectionTimer.time {
             try {
+              // 从ZK中获取broker列表
               val curBrokers = currentBrokerList.map(_.toInt).toSet.flatMap(zkUtils.getBrokerInfo)
               val curBrokerIds = curBrokers.map(_.id)
               val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds
+              // 过滤，得到新增broker列表
               val newBrokerIds = curBrokerIds -- liveOrShuttingDownBrokerIds
-              val deadBrokerIds = liveOrShuttingDownBrokerIds -- curBrokerIds
               val newBrokers = curBrokers.filter(broker => newBrokerIds(broker.id))
+              // 故障的broker
+              val deadBrokerIds = liveOrShuttingDownBrokerIds -- curBrokerIds
+              // 更新ControllerContext的可用Broker列表
               controllerContext.liveBrokers = curBrokers
               val newBrokerIdsSorted = newBrokerIds.toSeq.sorted
               val deadBrokerIdsSorted = deadBrokerIds.toSeq.sorted
               val liveBrokerIdsSorted = curBrokerIds.toSeq.sorted
               info("Newly added brokers: %s, deleted brokers: %s, all live brokers: %s"
                 .format(newBrokerIdsSorted.mkString(","), deadBrokerIdsSorted.mkString(","), liveBrokerIdsSorted.mkString(",")))
+              // 创建Controller与新增broker的网络连接
               newBrokers.foreach(controllerContext.controllerChannelManager.addBroker)
+              // 关闭controller与故障broker的网络连接
               deadBrokerIds.foreach(controllerContext.controllerChannelManager.removeBroker)
+              // 分别处理上下线broker
               if(newBrokerIds.size > 0)
                 controller.onBrokerStartup(newBrokerIdsSorted)
               if(deadBrokerIds.size > 0)
