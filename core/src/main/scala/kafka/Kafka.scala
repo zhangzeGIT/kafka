@@ -60,6 +60,7 @@ object Kafka extends Logging {
       // attach shutdown handler to catch control-c
       Runtime.getRuntime().addShutdownHook(new Thread() {
         override def run() = {
+          // 会调用controllerShutdown方法向Controller leader发送ControllerShutdowRequest
           kafkaServerStartable.shutdown
         }
       })
