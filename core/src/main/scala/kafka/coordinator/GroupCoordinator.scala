@@ -507,10 +507,12 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  // 当broker成为Offsets Topic分区的leader副本时，会回调这个函数
   def handleGroupImmigration(offsetTopicPartitionId: Int) {
     groupManager.loadGroupsForPartition(offsetTopicPartitionId, onGroupLoaded)
   }
 
+  // d当broker成为Offsets Topic分区的follower副本时会回到这个方法进行清除工作
   def handleGroupEmigration(offsetTopicPartitionId: Int) {
     groupManager.removeGroupsForPartition(offsetTopicPartitionId, onGroupUnloaded)
   }

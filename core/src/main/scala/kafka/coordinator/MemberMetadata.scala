@@ -50,6 +50,11 @@ case class MemberSummary(memberId: String,
  *                            is kept in metadata until the leader provides the group assignment
  *                            and the group transitions to stable
  */
+// 记录消费者信息的元数据
+// memberId：消费者ID，服务端GroupCoordinator分配的
+// groupId：记录消费者所在的ConsumerGroup的ID
+// supportedProtocols：对应消费者支持的PartitionAssignor
+// sessionTimeoutMS：心跳超时时间
 @nonthreadsafe
 private[coordinator] class MemberMetadata(val memberId: String,
                                           val groupId: String,
@@ -58,10 +63,15 @@ private[coordinator] class MemberMetadata(val memberId: String,
                                           val sessionTimeoutMs: Int,
                                           var supportedProtocols: List[(String, Array[Byte])]) {
 
+  // 分配给当前Member的分区信息
   var assignment: Array[Byte] = Array.empty[Byte]
+  // 与JoinGroupRequest相关的回调函数
   var awaitingJoinCallback: JoinGroupResult => Unit = null
+  // 与SyncGroupRequest相关的回调函数
   var awaitingSyncCallback: (Array[Byte], Short) => Unit = null
+  // latestHeartbeat:最后一次收到心跳消息的时间戳
   var latestHeartbeat: Long = -1
+  // 标记对应消费者是否已经离开了ConsumerGroup
   var isLeaving: Boolean = false
 
   def protocols = supportedProtocols.map(_._1).toSet
@@ -105,6 +115,7 @@ private[coordinator] class MemberMetadata(val memberId: String,
    * Vote for one of the potential group protocols. This takes into account the protocol preference as
    * indicated by the order of supported protocols and returns the first one also contained in the set
    */
+  // 提供了从给定候选PartitionAssignor中选择消费者支持的PartitionAssignor
   def vote(candidates: Set[String]): String = {
     supportedProtocols.find({ case (protocol, _) => candidates.contains(protocol)}) match {
       case Some((protocol, _)) => protocol

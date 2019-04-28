@@ -119,13 +119,19 @@ case class GroupSummary(state: String,
  *  2. generation id
  *  3. leader id
  */
+// 记录ConsumerGroup的元数据信息
+//  groupId:对应Consumer Group的ID
 @nonthreadsafe
 private[coordinator] class GroupMetadata(val groupId: String, val protocolType: String) {
 
+  // key是memberId，value是对应的MemberMetadata对象
   private val members = new mutable.HashMap[String, MemberMetadata]
   private var state: GroupState = Stable
+  // 标识当前ConsumerGroup的年代信息
   var generationId = 0
+  // 记录ConsumerGroup中的Leader消费者的memberId
   var leaderId: String = null
+  // 记录了当前ConsumerGroup选择的PartitionAssignor
   var protocol: String = null
 
   def is(groupState: GroupState) = state == groupState
@@ -137,6 +143,7 @@ private[coordinator] class GroupMetadata(val groupId: String, val protocolType: 
     assert(supportsProtocols(member.protocols))
 
     if (leaderId == null)
+      // 第一个加入的Member即为GroupLeader
       leaderId = memberId
     members.put(memberId, member)
   }
@@ -147,7 +154,7 @@ private[coordinator] class GroupMetadata(val groupId: String, val protocolType: 
       leaderId = if (members.isEmpty) {
         null
       } else {
-        members.keys.head
+        members.keys.head// leader被删除，重新选举leader
       }
     }
   }
@@ -181,9 +188,14 @@ private[coordinator] class GroupMetadata(val groupId: String, val protocolType: 
       throw new IllegalStateException("Cannot select protocol for empty group")
 
     // select the protocol for this group which is supported by all members
+    // 所有Member都支持的协议作为候选协议集合
     val candidates = candidateProtocols
 
     // let each member vote for one of the protocols and choose the one with the most votes
+
+    // 每个Member都通过vote方法进行投票
+    // 每个Member会为其supportedProtocols集合中的第一个候选协议投一票
+    // 最终将选择得票最多的PartitionAssignor
     val votes: List[(String, Int)] = allMemberMetadata
       .map(_.vote(candidates))
       .groupBy(identity)

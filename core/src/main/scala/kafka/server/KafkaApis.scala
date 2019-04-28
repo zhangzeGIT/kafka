@@ -124,6 +124,10 @@ class KafkaApis(val requestChannel: RequestChannel,
       request.apiLocalCompleteTimeMs = SystemTime.milliseconds
   }
 
+  // 当某个leader副本所在的broker出现故障时会发生迁移
+  // 那么Consumer Group则由新leader副本所在的broker上运行的Group Coordinator负责管理
+  // GroupCoordinator应该如何将groupsCache和offsetsCache集合中的信息转移到新GroupCoordinator呢？
+  //        处理完LeaderAndIsrRequest之后，会回调onLeadershipChange方法处理迁移操作
   def handleLeaderAndIsrRequest(request: RequestChannel.Request) {
     // ensureTopicExists is only for client facing requests
     // We can't have the ensureTopicExists check here since the controller sends it as an advisory to all brokers so they
@@ -149,6 +153,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       val responseHeader = new ResponseHeader(correlationId)
       val leaderAndIsrResponse =
         if (authorize(request.session, ClusterAction, Resource.ClusterResource)) {
+          // onLeadershipChange作为这个方法的回调
           val result = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, metadataCache, onLeadershipChange)
           new LeaderAndIsrResponse(result.errorCode, result.responseMap.mapValues(new JShort(_)).asJava)
         } else {
@@ -822,7 +827,21 @@ class KafkaApis(val requestChannel: RequestChannel,
     requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, responseHeader, offsetFetchResponse)))
   }
 
+  // 消费者与GroupCoordinator交互之前
+  // 首先发送GroupCoordinatorRequest到负载较小的broker
+  // 目的查询管理其所在ConsumerGroup对应的GroupCoordinator的网络位置
+  // 之后，消费者会连接到GroupCoordinator，发送剩余的JoinGroupRequest和SyncGroupRequest
+
+  // 负责GroupCoordinatorRequest的相关处理
+  /**
+    * 步骤一：使用partitionFor方法得到保存对应Consumer Group信息的Offsets Topic分区
+    *         通过Offsets Topic分区查找其MetadataCache，得到Offsets Topic分区的leader副本所在的broker
+    * 步骤二：其上的GroupCoordinator负责管理该Consumer Group
+    */
   def handleGroupCoordinatorRequest(request: RequestChannel.Request) {
+    /**
+      * 权限验证
+      */
     val groupCoordinatorRequest = request.body.asInstanceOf[GroupCoordinatorRequest]
     val responseHeader = new ResponseHeader(request.header.correlationId)
 
@@ -830,19 +849,24 @@ class KafkaApis(val requestChannel: RequestChannel,
       val responseBody = new GroupCoordinatorResponse(Errors.GROUP_AUTHORIZATION_FAILED.code, Node.noNode)
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
     } else {
+      // 通过groupId得到对应的Offsets Topic分区的Id
       val partition = coordinator.partitionFor(groupCoordinatorRequest.groupId)
 
       // get metadata (and create the topic if necessary)
+      // 从MetadataCache中获取Offsets Topic还未创建
+      // 则会在这里创建
       val offsetsTopicMetadata = getOrCreateGroupMetadataTopic(request.securityProtocol)
 
       val responseBody = if (offsetsTopicMetadata.error != Errors.NONE) {
         new GroupCoordinatorResponse(Errors.GROUP_COORDINATOR_NOT_AVAILABLE.code, Node.noNode)
       } else {
+        // 通过上述Offsets Topic Partition的id获取其leader所在的Node
         val coordinatorEndpoint = offsetsTopicMetadata.partitionMetadata().asScala
           .find(_.partition == partition)
           .map(_.leader())
 
         coordinatorEndpoint match {
+          // 创建GroupCoordinatorResponse
           case Some(endpoint) if !endpoint.isEmpty =>
             new GroupCoordinatorResponse(Errors.NONE.code, endpoint)
           case _ =>
@@ -852,6 +876,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
       trace("Sending consumer metadata %s for correlation id %d to client %s."
         .format(responseBody, request.header.correlationId, request.header.clientId))
+      // 将响应加入RequestChannel，等待发送
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
     }
   }
