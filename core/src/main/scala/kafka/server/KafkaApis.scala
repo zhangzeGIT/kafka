@@ -770,7 +770,11 @@ class KafkaApis(val requestChannel: RequestChannel,
   /*
    * Handle an offset fetch request
    */
+  // ConsumerGroup宕机重新上线时，可以向GroupCoordinator发送OffsetFetchRequest获取其最近一次提交的offset
+  // GroupCoordinator收到此消息后会交给GroupMetadataManager进行处理
+  // 它会根据请求中groupId查找对应的OffsetAndMetadata对象，并返回给消费者
   def handleOffsetFetchRequest(request: RequestChannel.Request) {
+    // 验证部分
     val header = request.header
     val offsetFetchRequest = request.body.asInstanceOf[OffsetFetchRequest]
 
@@ -789,6 +793,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       val unauthorizedStatus = unauthorizedTopicPartitions.map(topicPartition => (topicPartition, unauthorizedTopicResponse)).toMap
       val unknownTopicPartitionResponse = new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET, "", Errors.UNKNOWN_TOPIC_OR_PARTITION.code)
 
+      // 如果version是零，代表元数据存在于ZK，跟ZK打交道
       if (header.apiVersion == 0) {
         // version 0 reads offsets from ZK
         val responseInfo = authorizedTopicPartitions.map { topicPartition =>
@@ -812,8 +817,11 @@ class KafkaApis(val requestChannel: RequestChannel,
           }
         }.toMap
         new OffsetFetchResponse((responseInfo ++ unauthorizedStatus).asJava)
-      } else {
+      }
+      // 新版本
+      else {
         // version 1 reads offsets from Kafka;
+        // 将OffsetFetchRequest委托给GroupCoordinator处理
         val offsets = coordinator.handleFetchOffsets(offsetFetchRequest.groupId, authorizedTopicPartitions).toMap
 
         // Note that we do not need to filter the partitions in the
@@ -824,6 +832,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     trace(s"Sending offset fetch response $offsetFetchResponse for correlation id ${header.correlationId} to client ${header.clientId}.")
+    // 将OffsetFetchResponse放入RequestChannel中等待发送
     requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, responseHeader, offsetFetchResponse)))
   }
 
@@ -917,20 +926,26 @@ class KafkaApis(val requestChannel: RequestChannel,
     requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
   }
 
+  // 消费者向GroupCoordinator发送JoinGroupRequest
+  // 也是rebalance的第一个步骤
   def handleJoinGroupRequest(request: RequestChannel.Request) {
     import JavaConversions._
 
+    // 解析JoinGroupRequest
     val joinGroupRequest = request.body.asInstanceOf[JoinGroupRequest]
     val responseHeader = new ResponseHeader(request.header.correlationId)
 
     // the callback for sending a join-group response
+    // 回调函数的定义
     def sendResponseCallback(joinResult: JoinGroupResult) {
       val members = joinResult.members map { case (memberId, metadataArray) => (memberId, ByteBuffer.wrap(metadataArray)) }
+      // 创建JoinGroupResponse
       val responseBody = new JoinGroupResponse(joinResult.errorCode, joinResult.generationId, joinResult.subProtocol,
         joinResult.memberId, joinResult.leaderId, members)
 
       trace("Sending join group response %s for correlation id %d to client %s."
         .format(responseBody, request.header.correlationId, request.header.clientId))
+      // 将JoinGroupResponse放入RequestChannel中等待发送
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
     }
 
@@ -947,6 +962,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       // let the coordinator to handle join-group
       val protocols = joinGroupRequest.groupProtocols().map(protocol =>
         (protocol.name, Utils.toArray(protocol.metadata))).toList
+      // 将JoinGroupRequest交给GroupCoordinator方法处理
       coordinator.handleJoinGroup(
         joinGroupRequest.groupId,
         joinGroupRequest.memberId,

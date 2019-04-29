@@ -25,6 +25,7 @@ import org.apache.kafka.common.protocol.Errors
 
 import collection.mutable
 
+// 表示Consumer Group状态，GroupCoordinator中管理ConsumerGroup时使用的状态
 private[coordinator] sealed trait GroupState { def state: Byte }
 
 /**
@@ -39,6 +40,17 @@ private[coordinator] sealed trait GroupState { def state: Byte }
  * transition: some members have joined by the timeout => AwaitingSync
  *             all members have left the group => Dead
  */
+/**
+  * 正常处理OffsetFetchRequest，leaveGroupRequest，OffsetCommitRequest
+  * 收到HeartbeatRequest和SyncGroupRequest，会在响应中携带REBALANCE_IN_PROGRESS错误码
+  * 收到JoinGroupRequest是，GroupCoordinator会先创建对应的DelayedJoin，等待条件满足后对其进行响应
+  */
+/**
+  * 状态转换
+  *   PreparingRebalance -> AwaitingSync：当有DelayedJoin超时或是ConsumerGroup之前的Member都已经重新申请加入时进行切换
+  *   -> Dead：所有的Member都离开Consumer Group时进行切换
+  */
+// Consumer Group当前正在准备进行Rebalance操作
 private[coordinator] case object PreparingRebalance extends GroupState { val state: Byte = 1 }
 
 /**
@@ -53,6 +65,19 @@ private[coordinator] case object PreparingRebalance extends GroupState { val sta
  *             leave group from existing member => PreparingRebalance
  *             member failure detected => PreparingRebalance
  */
+/**
+  * 此状态标识正在等待Group Leader的SyncGroupRequest
+  * 收到OffsetCommitRequest和HeartbeatRequest请求时，会在响应中携带REBALANCE_IN_PROGRESS错误码进行标识
+  * 对于来自Group Follower的SyncGroupRequest，则直接抛异常，直到收到Group Leader的SyncGroupRequest时一起响应
+  */
+/**
+  *  -> Stable：GroupCoordinator收到GroupLeader发来的SyncGroupRequest时进行切换
+  *  -> PreparingRebalance：
+  *             1、有Member加入或退出Consumer Group
+  *             2、有新的Member请求加入Consumer Group
+  *             3、ConsumerGroup中有Member心跳超时
+  */
+// 正在等待GroupLeader将分区的分配结果发送到GroupCoordinator
 private[coordinator] case object AwaitingSync extends GroupState { val state: Byte = 5}
 
 /**
@@ -68,6 +93,15 @@ private[coordinator] case object AwaitingSync extends GroupState { val state: By
  *             leader join-group received => PreparingRebalance
  *             follower join-group with new metadata => PreparingRebalance
  */
+/**
+  *  -> PreparingRebalance：
+  *             1、Consumer Group中现有Member心跳检测超时
+  *             2、现有Member主动退出
+  *             3、当前的Group Leader发送JoinGroupRequest
+  *             4、有新的Member请求加入Consumer Group
+  */
+// 能处理所有请求
+// 正常状态，也是初始状态
 private[coordinator] case object Stable extends GroupState { val state: Byte = 3 }
 
 /**
@@ -80,7 +114,9 @@ private[coordinator] case object Stable extends GroupState { val state: Byte = 3
  *         respond to offset commit with UNKNOWN_MEMBER_ID
  *         allow offset fetch requests
  * transition: Dead is a final state before group metadata is cleaned up, so there are no transitions
+  * 只会相应OffsetCommitRequest
  */
+// 已经没有Member存在了
 private[coordinator] case object Dead extends GroupState { val state: Byte = 4 }
 
 
