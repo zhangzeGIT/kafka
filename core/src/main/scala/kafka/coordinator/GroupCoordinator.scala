@@ -296,30 +296,37 @@ class GroupCoordinator(val brokerId: Int,
     var delayedGroupStore: Option[DelayedStore] = None
 
     group synchronized {
+      // 检测memberID
       if (!group.has(memberId)) {
         responseCallback(Array.empty, Errors.UNKNOWN_MEMBER_ID.code)
-      } else if (generationId != group.generationId) {
+      } else if (generationId != group.generationId) {// 检测generationId
         responseCallback(Array.empty, Errors.ILLEGAL_GENERATION.code)
       } else {
         group.currentState match {
+          // 直接返回错误码
           case Dead =>
             responseCallback(Array.empty, Errors.UNKNOWN_MEMBER_ID.code)
-
+          // 直接返回错误码
           case PreparingRebalance =>
             responseCallback(Array.empty, Errors.REBALANCE_IN_PROGRESS.code)
 
           case AwaitingSync =>
+            // 设置awaitingSyncCallback回调函数
             group.get(memberId).awaitingSyncCallback = responseCallback
+            // 更新最后一次收到心跳的时间戳，并创建新的DelayedHeartbeat对象等待下次心跳到来
             completeAndScheduleNextHeartbeatExpiration(group, group.get(memberId))
 
             // if this is the leader, then we can attempt to persist state and transition to stable
+            // 处理GroupLeader发送的SyncGroupRequest
             if (memberId == group.leaderId) {
               info(s"Assignment received from leader for group ${group.groupId} for generation ${group.generationId}")
 
               // fill any missing members with an empty assignment
+              // 将未分配到分区的Member对应的分配结果填充为空的Byte数组
               val missing = group.allMembers -- groupAssignment.keySet
               val assignment = groupAssignment ++ missing.map(_ -> Array.empty[Byte]).toMap
 
+              // 通过GroupMetadataManager将GroupMetadata相关信息形成消息，并写入对应的OffsetsTopic分区中
               delayedGroupStore = Some(groupManager.prepareStoreGroup(group, assignment, (errorCode: Short) => {
                 group synchronized {
                   // another member may have joined the group while we were awaiting this callback,
@@ -328,10 +335,12 @@ class GroupCoordinator(val brokerId: Int,
                   // 首先，检测Consumer Group状态以及年代信息
                   if (group.is(AwaitingSync) && generationId == group.generationId) {
                     if (errorCode != Errors.NONE.code) {
+                      // 清空分区的分配结果，发送异常响应
                       resetAndPropagateAssignmentError(group, errorCode)
+                      // 切换成PreparingRebalance状态
                       maybePrepareRebalance(group)
                     } else {
-                      // 重点分析此方法的内容
+                      // 重点分析此方法的内容（设置分区的分配结果，发送正常的SyncGroupResponse）
                       setAndPropagateAssignment(group, assignment)
                       // Consumer Group的状态
                       group.transitionTo(Stable)
@@ -343,8 +352,10 @@ class GroupCoordinator(val brokerId: Int,
 
           case Stable =>
             // if the group is stable, we just return the current assignment
+            // 将分配给此Member的负责处理的分区信息返回
             val memberMetadata = group.get(memberId)
             responseCallback(memberMetadata.assignment, Errors.NONE.code)
+            // 心跳相关操作
             completeAndScheduleNextHeartbeatExpiration(group, group.get(memberId))
         }
       }
@@ -387,24 +398,29 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /**
+    * 首先进行一系列的检测，保证GroupMetadataManager处于可用状态并且对应ConsumerGroup的管理者
+    * 之后检测ConsumerGroup状态，MemberId，generationId是否合法
+    * 最后，调用complete……方法
+    */
   def handleHeartbeat(groupId: String,
                       memberId: String,
                       generationId: Int,
                       responseCallback: Short => Unit) {
     if (!isActive.get) {
       responseCallback(Errors.GROUP_COORDINATOR_NOT_AVAILABLE.code)
-    } else if (!isCoordinatorForGroup(groupId)) {
+    } else if (!isCoordinatorForGroup(groupId)) {// 检测GroupCoordinator是否管理该Consumer Group
       responseCallback(Errors.NOT_COORDINATOR_FOR_GROUP.code)
-    } else if (isCoordinatorLoadingInProgress(groupId)) {
+    } else if (isCoordinatorLoadingInProgress(groupId)) {// 是否已经加载对应的OffsetsTopic分区
       // the group is still loading, so respond just blindly
       responseCallback(Errors.NONE.code)
     } else {
       val group = groupManager.getGroup(groupId)
-      if (group == null) {
+      if (group == null) {// GroupMetadata是否存在
         responseCallback(Errors.UNKNOWN_MEMBER_ID.code)
       } else {
         group synchronized {
-          if (group.is(Dead)) {
+          if (group.is(Dead)) {// 检测Consumer Group的状态
             // if the group is marked as dead, it means some other thread has just removed the group
             // from the coordinator metadata; this is likely that the group has migrated to some other
             // coordinator OR the group is in a transient unstable phase. Let the member retry
@@ -412,12 +428,13 @@ class GroupCoordinator(val brokerId: Int,
             responseCallback(Errors.UNKNOWN_MEMBER_ID.code)
           } else if (!group.is(Stable)) {
             responseCallback(Errors.REBALANCE_IN_PROGRESS.code)
-          } else if (!group.has(memberId)) {
+          } else if (!group.has(memberId)) {// 检测MemberId
             responseCallback(Errors.UNKNOWN_MEMBER_ID.code)
-          } else if (generationId != group.generationId) {
+          } else if (generationId != group.generationId) {// 检测generationId
             responseCallback(Errors.ILLEGAL_GENERATION.code)
           } else {
             val member = group.get(memberId)
+            // 调用方法，继续下一步骤
             completeAndScheduleNextHeartbeatExpiration(group, member)
             responseCallback(Errors.NONE.code)
           }
@@ -625,15 +642,22 @@ class GroupCoordinator(val brokerId: Int,
 
   /**
    * Complete existing DelayedHeartbeats for the given member and schedule the next one
+    * 更新收到此Member心跳的时间戳
+    * 尝试执行对应的DelayedHeartbeat，并创建新的DelayedHeartbeat对象放入heartbeatPurgatory中，等待下次心跳到来或DelayedHeartbeat超时
    */
   private def completeAndScheduleNextHeartbeatExpiration(group: GroupMetadata, member: MemberMetadata) {
     // complete current heartbeat expectation
+    // 更新心跳时间
     member.latestHeartbeat = time.milliseconds()
+    // 获取DelayedHeartbeat的key
     val memberKey = MemberKey(member.groupId, member.memberId)
+    // 尝试完成之前添加的DelayedHeartbeat
     heartbeatPurgatory.checkAndComplete(memberKey)
 
     // reschedule the next heartbeat expiration deadline
+    // 计算下一次的Heartbeat的超时时间
     val newHeartbeatDeadline = member.latestHeartbeat + member.sessionTimeoutMs
+    // 创建新的DelayedHeartbeat对象，并添加到heartbeatPurgatory中管理
     val delayedHeartbeat = new DelayedHeartbeat(this, group, member, newHeartbeatDeadline, member.sessionTimeoutMs)
     heartbeatPurgatory.tryCompleteElseWatch(delayedHeartbeat, Seq(memberKey))
   }
@@ -706,16 +730,22 @@ class GroupCoordinator(val brokerId: Int,
 
   private def onMemberFailure(group: GroupMetadata, member: MemberMetadata) {
     trace("Member %s in group %s has failed".format(member.memberId, group.groupId))
+    // 将对应的Member从GroupMetadata中删除
     group.remove(member.memberId)
     group.currentState match {
+      // 不做任何处理
       case Dead =>
+      // 之前的分区可能已经失效了，将GroupMetadata切换成PreparingRebalance状态
       case Stable | AwaitingSync => maybePrepareRebalance(group)
+      // GroupMetadata中的Member减少，可能满足DelayedJoin的执行条件，尝试执行
       case PreparingRebalance => joinPurgatory.checkAndComplete(GroupKey(group.groupId))
     }
   }
 
+  // 判断GroupMetadata中的已知Member是否已重新申请加入来决定DelayedJoin是否符合执行条件
   def tryCompleteJoin(group: GroupMetadata, forceComplete: () => Boolean) = {
     group synchronized {
+      // 判断已知Member是否已经申请加入
       if (group.notYetRejoinedMembers.isEmpty)
         forceComplete()
       else false
@@ -726,30 +756,44 @@ class GroupCoordinator(val brokerId: Int,
     // TODO: add metrics for restabilize timeouts
   }
 
+  // 已知Member都已申请重新加入或DelayedJoin到期时，都会执行这个方法
+  /**
+    * 1、首先，将未重新申请加入的已知Member删除
+    * 2、如果GroupMetadata中不再包含任何Member，则将Consume Group转换成Dead状态，删除对应的GroupMetadata对象并向Offsets Topic中对应的分区写入删除标记
+    * 3、之后，更新generationId，调用awaitingJoinCallback回调函数发送JoinGroupResponse
+    * @param group
+    */
   def onCompleteJoin(group: GroupMetadata) {
     group synchronized {
+      // 获取未重新申请加入的已知Member的集合
       val failedMembers = group.notYetRejoinedMembers
       if (group.isEmpty || !failedMembers.isEmpty) {
         failedMembers.foreach { failedMember =>
+          // 移除未加入的已知Member
           group.remove(failedMember.memberId)
           // TODO: cut the socket connection to the client
         }
 
         // TODO KAFKA-2720: only remove group in the background thread
+        // 如果GroupMetadata中已经没有Member，则将GroupMetadata切换成Dead状态
         if (group.isEmpty) {
           group.transitionTo(Dead)
+          // 删除GroupMetadata对象，并在对应的Offsets Topic Partition中添加删除标记
           groupManager.removeGroup(group)
           info("Group %s generation %s is dead and removed".format(group.groupId, group.generationId))
         }
       }
       if (!group.is(Dead)) {
+        // generationId递增，选择该Consumer Group最终使用的PartitionAssignor
         group.initNextGeneration()
         info("Stabilized group %s generation %s".format(group.groupId, group.generationId))
 
         // trigger the awaiting join group response callback for all the members after rebalancing
+        // 向GroupMetadata中所有的Member发送JoinGroupResponse
         for (member <- group.allMemberMetadata) {
           assert(member.awaitingJoinCallback != null)
           val joinResult = JoinGroupResult(
+            // 发送给Group leader和follower的JoinGroupResponse内容不同
             members=if (member.memberId == group.leaderId) { group.currentMemberMetadata } else { Map.empty },
             memberId=member.memberId,
             generationId=group.generationId,
@@ -757,29 +801,41 @@ class GroupCoordinator(val brokerId: Int,
             leaderId=group.leaderId,
             errorCode=Errors.NONE.code)
 
+          // 调用回调函数，既KafkaApis.handleJoinGroupRequest方法中定义的sendResponseCallback，将响应放到RequestChannel中等待发送
           member.awaitingJoinCallback(joinResult)
           member.awaitingJoinCallback = null
+          // 心跳操作
           completeAndScheduleNextHeartbeatExpiration(group, member)
         }
       }
     }
   }
 
+  /**
+    * 检测四个条件，满足其中任意一条，则认为DelayedHeartbeat符合执行条件
+    *   1、最后一次收到心跳信息的时间与heartbeatDeadline的差距大于sessionTimeout
+    *   2、awaitingJoinCallback不为空，既消费者正在等待JoinGroupResponse
+    *   3、awaitingSyncCallback不为空，既消费正在等待SyncGroupResponse
+    *   4、消费者已经离开了Consumer Group
+    */
   def tryCompleteHeartbeat(group: GroupMetadata, member: MemberMetadata, heartbeatDeadline: Long, forceComplete: () => Boolean) = {
     group synchronized {
-      if (shouldKeepMemberAlive(member, heartbeatDeadline) || member.isLeaving)
+      if (shouldKeepMemberAlive(member, heartbeatDeadline) || member.isLeaving)// 检测条件1-3// 检测4
         forceComplete()
       else false
     }
   }
 
+  // DelayedHeartbeat到期还会执行这个方法
+  // 将其对应的Member从GroupMetadata中删除，并按照当前GroupMetadata所处的状态进行分类处理
   def onExpireHeartbeat(group: GroupMetadata, member: MemberMetadata, heartbeatDeadline: Long) {
     group synchronized {
       if (!shouldKeepMemberAlive(member, heartbeatDeadline))
-        onMemberFailure(group, member)
+        onMemberFailure(group, member)// Member下线后的相关处理操作
     }
   }
 
+  // 空实现，DelayedHeartbeat执行之后，仅会将其从heartbeatPurgatory中删除，并不会进行其他操作
   def onCompleteHeartbeat() {
     // TODO: add metrics for complete heartbeats
   }
@@ -787,8 +843,11 @@ class GroupCoordinator(val brokerId: Int,
   def partitionFor(group: String): Int = groupManager.partitionFor(group)
 
   private def shouldKeepMemberAlive(member: MemberMetadata, heartbeatDeadline: Long) =
+    // 条件二
     member.awaitingJoinCallback != null ||
+      // 条件三
       member.awaitingSyncCallback != null ||
+      // 条件一
       member.latestHeartbeat + member.sessionTimeoutMs > heartbeatDeadline
 
   private def isCoordinatorForGroup(groupId: String) = groupManager.isGroupLocal(groupId)

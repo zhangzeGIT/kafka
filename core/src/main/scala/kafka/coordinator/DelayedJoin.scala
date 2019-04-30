@@ -29,6 +29,11 @@ import kafka.server.DelayedOperation
  * the group are marked as failed, and complete this operation to proceed rebalance with
  * the rest of the group.
  */
+// 等待Consumer Group中所有的消费者发送JoinGroupRequest申请加入
+// 每当处理完新收到的JoinGroupRequest时，都会检测相关的DelayedJoin是否能够完成
+// 经过一段时间的等待，DelayedJoin也会到期执行
+//    group：DelayedJoin对应的GroupMetadata对象
+//    sessionTimeout：到期时长
 private[coordinator] class DelayedJoin(coordinator: GroupCoordinator,
                                             group: GroupMetadata,
                                             sessionTimeout: Long)

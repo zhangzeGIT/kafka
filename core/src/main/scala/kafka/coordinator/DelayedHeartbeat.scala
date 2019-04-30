@@ -23,6 +23,10 @@ import kafka.server.DelayedOperation
  * Delayed heartbeat operations that are added to the purgatory for session timeout checking.
  * Heartbeats are paused during rebalance.
  */
+// group：对应的GroupMetadata对象
+// member：对应的MemberMetadata对象
+// heartbeatDeadline：DelayedHeartbeat的到期时间戳
+// sessionTimeout：指定了DelayedHeartbeat的到期时长，此时间是消费者在JoinGroupRequest中设置的
 private[coordinator] class DelayedHeartbeat(coordinator: GroupCoordinator,
                                             group: GroupMetadata,
                                             member: MemberMetadata,

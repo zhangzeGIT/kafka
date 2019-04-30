@@ -975,6 +975,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  // Rebalance操作的第三步
   def handleSyncGroupRequest(request: RequestChannel.Request) {
     import JavaConversions._
 
@@ -999,24 +1000,27 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  // HeartbeatRequest首先由这个方法处理
   def handleHeartbeatRequest(request: RequestChannel.Request) {
     val heartbeatRequest = request.body.asInstanceOf[HeartbeatRequest]
     val respHeader = new ResponseHeader(request.header.correlationId)
 
     // the callback for sending a heartbeat response
+    // 定义回调函数，将HeartbeatResponse放入RequestChannel等待发送
     def sendResponseCallback(errorCode: Short) {
       val response = new HeartbeatResponse(errorCode)
       trace("Sending heartbeat response %s for correlation id %d to client %s."
         .format(response, request.header.correlationId, request.header.clientId))
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, response)))
     }
-
+    // 权限验证
     if (!authorize(request.session, Read, new Resource(Group, heartbeatRequest.groupId))) {
       val heartbeatResponse = new HeartbeatResponse(Errors.GROUP_AUTHORIZATION_FAILED.code)
       requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, respHeader, heartbeatResponse)))
     }
     else {
       // let the coordinator to handle heartbeat
+      // 将HeartbeatRequest委托给GroupCoordinator处理
       coordinator.handleHeartbeat(
         heartbeatRequest.groupId(),
         heartbeatRequest.memberId(),

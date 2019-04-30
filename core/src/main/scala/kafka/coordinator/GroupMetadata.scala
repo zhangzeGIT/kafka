@@ -199,6 +199,7 @@ private[coordinator] class GroupMetadata(val groupId: String, val protocolType: 
 
   def isEmpty = members.isEmpty
 
+  // 前面介绍过awaitingJoinCallback是个非常重要的标记，它用来标记一个Member是否已经申请加入
   def notYetRejoinedMembers = members.values.filter(_.awaitingJoinCallback == null).toList
 
   def allMembers = members.keySet
