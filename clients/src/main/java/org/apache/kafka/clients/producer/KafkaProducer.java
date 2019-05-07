@@ -296,6 +296,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), time.milliseconds());
 
+            // 根据配置的协议，创建不同的ChannelBuilder实现
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config.values());
             // 创建NetworkClient，kafka网络IO的核心
             NetworkClient client = new NetworkClient(

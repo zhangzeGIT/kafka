@@ -30,12 +30,15 @@ public class PlainLoginModule implements LoginModule {
     private static final String USERNAME_CONFIG = "username";
     private static final String PASSWORD_CONFIG = "password";
 
+    // 对PlainSaslServerProvider进行注册
+    // PlainSaslServerProvider中以map的方式记录了PlainSaslServerFactory工厂类名称
     static {
         PlainSaslServerProvider.initialize();
     }
 
     @Override
     public void initialize(Subject subject, CallbackHandler callbackHandler, Map<String, ?> sharedState, Map<String, ?> options) {
+        // 读取username和password
         String username = (String) options.get(USERNAME_CONFIG);
         if (username != null)
             subject.getPublicCredentials().add(username);

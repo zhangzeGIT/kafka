@@ -56,6 +56,7 @@ public class PlainSaslServer implements SaslServer {
     public PlainSaslServer(CallbackHandler callbackHandler) {
     }
 
+    // 实现了对客户端的Response信息的处理
     @Override
     public byte[] evaluateResponse(byte[] response) throws SaslException {
         /*
@@ -73,6 +74,7 @@ public class PlainSaslServer implements SaslServer {
 
         String[] tokens;
         try {
+            // 解析
             tokens = new String(response, "UTF-8").split("\u0000");
         } catch (UnsupportedEncodingException e) {
             throw new SaslException("UTF-8 encoding not supported", e);
@@ -83,17 +85,21 @@ public class PlainSaslServer implements SaslServer {
         String username = tokens[1];
         String password = tokens[2];
 
+        // 检测username和password
         if (username.isEmpty()) {
             throw new SaslException("Authentication failed: username not specified");
         }
         if (password.isEmpty()) {
             throw new SaslException("Authentication failed: password not specified");
         }
+        // 使用SASL/PAIN方式进行身份认证时，authorizationId为空，会被赋值为username，在后面的权限控制时，会通过该字段确定其权限
         if (authorizationID.isEmpty())
             authorizationID = username;
 
         try {
+            // 读取配置文件中的信息，JAAS_USER_PREFIX字段的值为user_
             String expectedPassword = JaasUtils.jaasConfig(LoginType.SERVER.contextName(), JAAS_USER_PREFIX + username);
+            // 检测密码是否正确
             if (!password.equals(expectedPassword)) {
                 throw new SaslException("Authentication failed: Invalid username or password");
             }

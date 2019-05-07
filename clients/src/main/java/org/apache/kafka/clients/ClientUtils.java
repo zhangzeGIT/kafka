@@ -76,10 +76,13 @@ public class ClientUtils {
      * @return configured ChannelBuilder based on the configs.
      */
     public static ChannelBuilder createChannelBuilder(Map<String, ?> configs) {
+        // 根据“security.protocol”配置项的值，得到对应的SecurityProtocol对象
         SecurityProtocol securityProtocol = SecurityProtocol.forName((String) configs.get(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));
         if (!SecurityProtocol.nonTestingValues().contains(securityProtocol))
             throw new ConfigException("Invalid SecurityProtocol " + securityProtocol);
+        // 获取sasl.mechanism配置项的值
         String clientSaslMechanism = (String) configs.get(SaslConfigs.SASL_MECHANISM);
+        // 调用ChannelBuilders.create方法，创建对应的ChannelBuilder对象
         return ChannelBuilders.create(securityProtocol, Mode.CLIENT, LoginType.CLIENT, configs, clientSaslMechanism, true);
     }
 

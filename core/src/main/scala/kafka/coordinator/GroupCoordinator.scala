@@ -374,6 +374,7 @@ class GroupCoordinator(val brokerId: Int,
     } else if (isCoordinatorLoadingInProgress(groupId)) {
       responseCallback(Errors.GROUP_LOAD_IN_PROGRESS.code)
     } else {
+      // 如果遇到Group处于Dead，未知的memberId，则调用回调函数返回错误码
       val group = groupManager.getGroup(groupId)
       if (group == null) {
         // if the group is marked as dead, it means some other thread has just removed the group
@@ -389,8 +390,11 @@ class GroupCoordinator(val brokerId: Int,
             responseCallback(Errors.UNKNOWN_MEMBER_ID.code)
           } else {
             val member = group.get(consumerId)
+            // 将对应的MemberMetadata的isLeaving字段设置为true，尝试完成相应的DelayedHeartbeat
             removeHeartbeatForLeavingMember(group, member)
+            // 调用onMemeberFailure方法，移除对应的MemberMetadata对象并完成状态变化
             onMemberFailure(group, member)
+            // 调用回调函数
             responseCallback(Errors.NONE.code)
           }
         }
@@ -457,6 +461,7 @@ class GroupCoordinator(val brokerId: Int,
     } else if (isCoordinatorLoadingInProgress(groupId)) {
       responseCallback(offsetMetadata.mapValues(_ => Errors.GROUP_LOAD_IN_PROGRESS.code))
     } else {
+      // 如果对应的GroupMetadata对象不存在且generationId<0，则表示GroupCoordinator不维护Consumer Group的分区分配结果，只记录提交的offset
       val group = groupManager.getGroup(groupId)
       if (group == null) {
         if (generationId < 0)
@@ -468,6 +473,7 @@ class GroupCoordinator(val brokerId: Int,
           // or this is a request coming from an older generation. either way, reject the commit
           responseCallback(offsetMetadata.mapValues(_ => Errors.ILLEGAL_GENERATION.code))
       } else {
+        // 如果遇到Group处于Dead或AwaitingAync，未知的memberId，不合法的generationId，则调用回调函数并返回错误码
         group synchronized {
           if (group.is(Dead)) {
             responseCallback(offsetMetadata.mapValues(_ => Errors.UNKNOWN_MEMBER_ID.code))
@@ -480,6 +486,7 @@ class GroupCoordinator(val brokerId: Int,
           } else {
             val member = group.get(memberId)
             completeAndScheduleNextHeartbeatExpiration(group, member)
+            // 将记录offset的信息追加到对应的Offsets Topic分区中
             delayedOffsetStore = Some(groupManager.prepareStoreOffsets(groupId, memberId, generationId,
               offsetMetadata, responseCallback))
           }
@@ -541,39 +548,50 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  // 传入GroupMetadataManager.removeGroupsForPartition方法的回调
+  //  在GroupMetadata被删除之前，将Consumer Group状态转换成Dead
   private def onGroupUnloaded(group: GroupMetadata) {
     group synchronized {
       info(s"Unloading group metadata for ${group.groupId} with generation ${group.generationId}")
       val previousState = group.currentState
+      // 切换到Dead状态
       group.transitionTo(Dead)
-
+      // 根据之前的状态进行处理
       previousState match {
         case Dead =>
         case PreparingRebalance =>
+          // 调用全部Member的awaitingJoinCallback回调函数，返回指定错误码
           for (member <- group.allMemberMetadata) {
             if (member.awaitingJoinCallback != null) {
               member.awaitingJoinCallback(joinError(member.memberId, Errors.NOT_COORDINATOR_FOR_GROUP.code))
+              // 清空回调函数
               member.awaitingJoinCallback = null
             }
           }
+          // awaitingJoinCallback的变化，可能导致DelayedJoin满足条件，故进行尝试
           joinPurgatory.checkAndComplete(GroupKey(group.groupId))
 
+        // 处理与PreparingRebalance类似
         case Stable | AwaitingSync =>
           for (member <- group.allMemberMetadata) {
             if (member.awaitingSyncCallback != null) {
               member.awaitingSyncCallback(Array.empty[Byte], Errors.NOT_COORDINATOR_FOR_GROUP.code)
               member.awaitingSyncCallback = null
             }
+            // 尝试执行DelayedHeartbeat
             heartbeatPurgatory.checkAndComplete(MemberKey(member.groupId, member.memberId))
           }
       }
     }
   }
 
+  // 传入GroupMetadataManager.loadGroupsForPartition方法的回调函数
+  // 当出现GroupMetadata重复加载时，会调用它更新心跳
   private def onGroupLoaded(group: GroupMetadata) {
     group synchronized {
       info(s"Loading group metadata for ${group.groupId} with generation ${group.generationId}")
       assert(group.is(Stable))
+      // 更新所有member的心跳操作
       group.allMemberMetadata.foreach(completeAndScheduleNextHeartbeatExpiration(group, _))
     }
   }

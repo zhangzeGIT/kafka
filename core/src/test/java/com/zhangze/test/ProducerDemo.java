@@ -17,7 +17,13 @@ public class ProducerDemo {
         // 消息发送方式，同步还是异步
         boolean isAsync = args.length == 0 || !args[0].trim().equalsIgnoreCase("sync");
 
+        // 环境变量添加，需要输入配置文件的路径
+        System.setProperty("java.security.auth.login.config", "D:/myConf/kafka_client_jaas.conf");
         Properties properties = new Properties();
+        // 权限验证参数
+        properties.put("security.protocol", "SASL_PLAINTEXT");
+        properties.put("sasl.mechanism", "PLAIN");
+
         // kafka
         properties.put("bootstrap.servers", "localhost:9092");
         // 客户端ID

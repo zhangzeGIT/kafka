@@ -90,6 +90,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private SaslState saslState = SaslState.GSSAPI_OR_HANDSHAKE_REQUEST;
     // Next SASL state to be set when outgoing writes associated with the current SASL state complete
     private SaslState pendingSaslState = null;
+    // javax.security包中提供的用于SASL身份认证的服务端接口，服务端使用kafka提供的实现类PlainSaslServer
     private SaslServer saslServer;
     private String saslMechanism;
     private AuthCallbackHandler callbackHandler;
@@ -113,15 +114,20 @@ public class SaslServerAuthenticator implements Authenticator {
         this.host = host;
     }
 
+    // 初始化enabledMechanisms字段的内容
     public void configure(TransportLayer transportLayer, PrincipalBuilder principalBuilder, Map<String, ?> configs) {
+        // 初始化transportLayer字段
         this.transportLayer = transportLayer;
+        // 初始化配置信息
         this.configs = configs;
+        // 读取配置信息，初始化enabledMechanisms字段
         List<String> enabledMechanisms = (List<String>) this.configs.get(SaslConfigs.SASL_ENABLED_MECHANISMS);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty())
             throw new IllegalArgumentException("No SASL mechanisms are enabled");
         this.enabledMechanisms = new HashSet<>(enabledMechanisms);
     }
 
+    // 查找PlainSaslServerFactory工厂类，并通过反射的方式创建其对象，然后创建PlainSaslServer
     private void createSaslServer(String mechanism) throws IOException {
         this.saslMechanism = mechanism;
         callbackHandler = new SaslServerCallbackHandler(Configuration.getConfiguration(), kerberosNamer);
@@ -134,6 +140,7 @@ public class SaslServerAuthenticator implements Authenticator {
             try {
                 saslServer = Subject.doAs(subject, new PrivilegedExceptionAction<SaslServer>() {
                     public SaslServer run() throws SaslException {
+                        // 调用Sasl.createSaslServer方法
                         return Sasl.createSaslServer(saslMechanism, "kafka", host, configs, callbackHandler);
                     }
                 });
@@ -196,26 +203,40 @@ public class SaslServerAuthenticator implements Authenticator {
      * The messages are sent and received as size delimited bytes that consists of a 4 byte network-ordered size N
      * followed by N bytes representing the opaque payload.
      */
+    // 完成了saslState的状态切换以及服务端的验证操作
+    //      首先：处理客户端发来的SaslHandshakeRequest，验证服务端是否支持请求中指定的SASL机制，向客户端返回SaslHandshakeResponse
+    //      其次，将状态切换为AUTHENTICATE
+    //      之后，处理客户端发来的Response信息
+    //      身份认证失败，则生成相应的Challenge信息返回给客户端
+    //      成功，不反回任何数据，只将状态切换成COMPLETE
+    //      上述出现异常，将状态切换成FAILED
     public void authenticate() throws IOException {
+        // 如果输出缓冲区中有未发送完成的数据，则先将这些数据发送出去
         if (netOutBuffer != null && !flushNetOutBufferAndUpdateInterestOps())
             return;
 
+        // 检测认证是否已完成
         if (saslServer != null && saslServer.isComplete()) {
             setSaslState(SaslState.COMPLETE);
             return;
         }
 
+        // 创建输入缓冲区，从SocketChannel中读取数据
         if (netInBuffer == null) netInBuffer = new NetworkReceive(maxReceiveSize, node);
 
         netInBuffer.readFrom(transportLayer);
 
+        // 检测是否读取一个完整的信息
         if (netInBuffer.complete()) {
             netInBuffer.payload().rewind();
             byte[] clientToken = new byte[netInBuffer.payload().remaining()];
+            // 获取消息负载
             netInBuffer.payload().get(clientToken, 0, clientToken.length);
+            // 重置输入缓冲区
             netInBuffer = null; // reset the networkReceive as we read all the data.
             try {
                 switch (saslState) {
+                    // 以下两种状态都会处理握手信息
                     case HANDSHAKE_REQUEST:
                         handleKafkaRequest(clientToken);
                         break;
@@ -225,14 +246,15 @@ public class SaslServerAuthenticator implements Authenticator {
                         // For default GSSAPI, fall through to authenticate using the client token as the first GSSAPI packet.
                         // This is required for interoperability with 0.9.0.x clients which do not send handshake request
                     case AUTHENTICATE:
+                        // 处理客户端发来的response信息
                         byte[] response = saslServer.evaluateResponse(clientToken);
-                        if (response != null) {
+                        if (response != null) {// 返回Challenge信息
                             netOutBuffer = new NetworkSend(node, ByteBuffer.wrap(response));
                             flushNetOutBufferAndUpdateInterestOps();
                         }
                         // When the authentication exchange is complete and no more tokens are expected from the client,
                         // update SASL state. Current SASL state will be updated when outgoing writes to the client complete.
-                        if (saslServer.isComplete())
+                        if (saslServer.isComplete())// 身份验证成功
                             setSaslState(SaslState.COMPLETE);
                         break;
                     default:
@@ -287,6 +309,8 @@ public class SaslServerAuthenticator implements Authenticator {
         return netOutBuffer.completed();
     }
 
+    // 检测mechanism，切换状态
+    // 握手成功后根据指定的SASL机制创建SaslServer，既PlainSaslServer
     private boolean handleKafkaRequest(byte[] requestBytes) throws IOException, AuthenticationException {
         boolean isKafkaRequest = false;
         String clientMechanism = null;
@@ -296,6 +320,7 @@ public class SaslServerAuthenticator implements Authenticator {
             ApiKeys apiKey = ApiKeys.forId(requestHeader.apiKey());
             // A valid Kafka request header was received. SASL authentication tokens are now expected only
             // following a SaslHandshakeRequest since this is not a GSSAPI client token from a Kafka 0.9.0.x client.
+            // 切换状态
             setSaslState(SaslState.HANDSHAKE_REQUEST);
             isKafkaRequest = true;
 
@@ -308,10 +333,13 @@ public class SaslServerAuthenticator implements Authenticator {
                 AbstractRequest request = AbstractRequest.getRequest(requestHeader.apiKey(), requestHeader.apiVersion(), requestBuffer);
 
                 LOG.debug("Handle Kafka request {}", apiKey);
+                // 检测apiKey和version是否合法
                 switch (apiKey) {
                     case API_VERSIONS:
+                        // 返回broker支持的所有APIKeys
                         handleApiVersionsRequest(requestHeader, (ApiVersionsRequest) request);
                         break;
+                    // 检测服务器是否支持客户端指定的mechanism，并返回响应
                     case SASL_HANDSHAKE:
                         clientMechanism = handleHandshakeRequest(requestHeader, (SaslHandshakeRequest) request);
                         break;
@@ -319,6 +347,7 @@ public class SaslServerAuthenticator implements Authenticator {
                         throw new IllegalSaslStateException("Unexpected Kafka request of type " + apiKey + " during SASL handshake.");
                 }
             }
+        // 异常处理
         } catch (SchemaException | IllegalArgumentException e) {
             if (saslState == SaslState.GSSAPI_OR_HANDSHAKE_REQUEST) {
                 // SchemaException is thrown if the request is not in Kafka format. IIlegalArgumentException is thrown
@@ -342,7 +371,9 @@ public class SaslServerAuthenticator implements Authenticator {
                 throw e;
         }
         if (clientMechanism != null) {
+            // 如果SASL机制检测通过，则创建PlainSaslServer
             createSaslServer(clientMechanism);
+            // 切换成AUTHENTICATE状态
             setSaslState(SaslState.AUTHENTICATE);
         }
         return isKafkaRequest;

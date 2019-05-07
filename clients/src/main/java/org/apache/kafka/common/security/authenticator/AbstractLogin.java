@@ -55,22 +55,27 @@ public abstract class AbstractLogin implements Login {
     @Override
     public LoginContext login() throws LoginException {
         String jaasConfigFile = System.getProperty(JaasUtils.JAVA_LOGIN_CONFIG_PARAM);
+        // 是否指定了java.security.auth.login.config配置
         if (jaasConfigFile == null) {
             log.debug("System property '" + JaasUtils.JAVA_LOGIN_CONFIG_PARAM + "' is not set, using default JAAS configuration.");
         }
         AppConfigurationEntry[] configEntries = Configuration.getConfiguration().getAppConfigurationEntry(loginContextName);
+        // 检测是否能找到“KafkaClient”这个LoginContext配置
         if (configEntries == null) {
             String errorMessage = "Could not find a '" + loginContextName + "' entry in the JAAS configuration. System property '" +
                 JaasUtils.JAVA_LOGIN_CONFIG_PARAM + "' is " + (jaasConfigFile == null ? "not set" : jaasConfigFile);
             throw new IllegalArgumentException(errorMessage);
         }
 
+        // 创建LoginContext对象
         loginContext = new LoginContext(loginContextName, new LoginCallbackHandler());
+        // 调用LoginContext.login方法，完成认证操作
         loginContext.login();
         log.info("Successfully logged in.");
         return loginContext;
     }
 
+    // 返回PlainLoginModule中设置好用户名密码的Subject对象
     @Override
     public Subject subject() {
         return loginContext.getSubject();

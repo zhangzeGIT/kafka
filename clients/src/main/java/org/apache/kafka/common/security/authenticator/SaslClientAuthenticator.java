@@ -65,6 +65,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslClientAuthenticator.class);
 
+    // subject对象，标识用于身份认证的主体
     private final Subject subject;
     private final String servicePrincipal;
     private final String host;
@@ -73,19 +74,26 @@ public class SaslClientAuthenticator implements Authenticator {
     private final boolean handshakeRequestEnable;
 
     // assigned in `configure`
+    // javax.security包中提供的用于SASL身份认证的客户端接口
     private SaslClient saslClient;
     private Map<String, ?> configs;
     private String clientPrincipalName;
+    // 手机身份认证信息的回调函数
     private AuthCallbackHandler callbackHandler;
+    // PlaintextTransportLayer对象，表示底层的网络连接，其中封装了SocketChannel和SelectionKey
     private TransportLayer transportLayer;
 
     // buffers used in `authenticate`
+    // NetworkReceive对象，读取身份认证信息的输入缓冲区
     private NetworkReceive netInBuffer;
+    // 发送身份认证信息的输出缓冲区
     private NetworkSend netOutBuffer;
 
     // Current SASL state
+    // 标识当前SaslClientAuthenticator的状态
     private SaslState saslState;
     // Next SASL state to be set when outgoing writes associated with the current SASL state complete
+    // 输出缓冲区中的内容全部清空之前，由该字段暂存下一个saslState的值
     private SaslState pendingSaslState;
     // Correlation ID for the next request
     private int correlationId;
@@ -105,8 +113,9 @@ public class SaslClientAuthenticator implements Authenticator {
     public void configure(TransportLayer transportLayer, PrincipalBuilder principalBuilder, Map<String, ?> configs) throws KafkaException {
         try {
             this.transportLayer = transportLayer;
-            this.configs = configs;
+            this.configs = configs;// 配置信息
 
+            // 初始化saslState字段为SEND_HANDSHAKE_REQUEST,pendingSaslState字段为空
             setSaslState(handshakeRequestEnable ? SaslState.SEND_HANDSHAKE_REQUEST : SaslState.INITIAL);
 
             // determine client principal from subject.
@@ -116,9 +125,11 @@ public class SaslClientAuthenticator implements Authenticator {
             } else {
                 clientPrincipalName = null;
             }
+            // 用于搜集认证信息的SaslClientCallbackHandler
             callbackHandler = new SaslClientCallbackHandler();
             callbackHandler.configure(configs, Mode.CLIENT, subject, mechanism);
 
+            // 创建SaslClient对象
             saslClient = createSaslClient();
         } catch (Exception e) {
             throw new KafkaException("Failed to configure SaslClientAuthenticator", e);
@@ -147,42 +158,68 @@ public class SaslClientAuthenticator implements Authenticator {
      * The messages are sent and received as size delimited bytes that consists of a 4 byte network-ordered size N
      * followed by N bytes representing the opaque payload.
      */
+    // 认证过程
+    //  首先，发送握手消息，确定服务器是否支持客户端使用SASL机制
+    //  然后，发送一个空消息到服务端初始化身份认证流程
+    //  之后，通过saslClient.evaluateChallenge方法处理服务端的Challenge得到response
+    //  并向服务端发送response，重复此过程直到身份验证完成
     public void authenticate() throws IOException {
+        // 发送缓冲区还有未发送的数据，则需要先将这些数据发送完毕
         if (netOutBuffer != null && !flushNetOutBufferAndUpdateInterestOps())
             return;
 
+        // RECEIVE_HANDSHAKE_RESPONSE -> INITIAL/FAILED
+        //  客户端会接收服务端返回SaslHandshakeReponse，在其中记录了short类型的错误码以及服务支持的SASL机制集合
+        //  服务单返回非零的错误码，则抛出异常，并切换成FAILED状态
+        // INITIAL -> INTERMEDIATE
+        //  会以一个空的byte数组作为初始response发送给服务端
+        // INTERMEDIATE -> COMPLETE
+        //  读取服务端返回的Challenge，之后调用saslClient.evaluateChallenge方法进行处理并得到response
+        //  如果已经严重通过，则response为空
+        //  否则，继续发送response
         switch (saslState) {
             case SEND_HANDSHAKE_REQUEST:
                 String clientId = (String) configs.get(CommonClientConfigs.CLIENT_ID_CONFIG);
                 currentRequestHeader = new RequestHeader(ApiKeys.SASL_HANDSHAKE.id, clientId, correlationId++);
+                // 创建并发送SaslHandshakeRequest
                 SaslHandshakeRequest handshakeRequest = new SaslHandshakeRequest(mechanism);
                 send(RequestSend.serialize(currentRequestHeader, handshakeRequest.toStruct()));
+                // 切换状态
                 setSaslState(SaslState.RECEIVE_HANDSHAKE_RESPONSE);
                 break;
             case RECEIVE_HANDSHAKE_RESPONSE:
+                // 读取SaslHandshakeResponse
                 byte[] responseBytes = receiveResponseOrToken();
+                // 未读取到一个完整的消息
                 if (responseBytes == null)
                     break;
                 else {
                     try {
+                        // 解析SaslHandshakeResponse
                         handleKafkaResponse(currentRequestHeader, responseBytes);
                         currentRequestHeader = null;
                     } catch (Exception e) {
                         setSaslState(SaslState.FAILED);
                         throw e;
                     }
+                    // 这里没有break，会执行下面的
                     setSaslState(SaslState.INITIAL);
                     // Fall through and start SASL authentication using the configured client mechanism
                 }
             case INITIAL:
+                // 发送空的byte数组，初始化身份验证流程
                 sendSaslToken(new byte[0], true);
                 setSaslState(SaslState.INTERMEDIATE);
                 break;
             case INTERMEDIATE:
+                // 读取服务端返回的Challenge信息
                 byte[] serverToken = receiveResponseOrToken();
+                // 读取到完整的Challenge信息
                 if (serverToken != null) {
+                    // 处理Challenge信息
                     sendSaslToken(serverToken, false);
                 }
+                // 通过，切换为COMPLETE
                 if (saslClient.isComplete()) {
                     setSaslState(SaslState.COMPLETE);
                     transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
@@ -205,8 +242,10 @@ public class SaslClientAuthenticator implements Authenticator {
         }
     }
 
+    // 处理服务端发送过来的Challenge信息，并将得到的新Response信息发送给服务端
     private void sendSaslToken(byte[] serverToken, boolean isInitial) throws IOException {
         if (!saslClient.isComplete()) {
+            // 处理Challenge信息
             byte[] saslToken = createSaslToken(serverToken, isInitial);
             if (saslToken != null)
                 send(ByteBuffer.wrap(saslToken));
@@ -215,6 +254,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private void send(ByteBuffer buffer) throws IOException {
         try {
+            // 将待发送数据封装成NetworkSend对象
             netOutBuffer = new NetworkSend(node, buffer);
             flushNetOutBufferAndUpdateInterestOps();
         } catch (IOException e) {
@@ -224,24 +264,29 @@ public class SaslClientAuthenticator implements Authenticator {
     }
 
     private boolean flushNetOutBufferAndUpdateInterestOps() throws IOException {
-        boolean flushedCompletely = flushNetOutBuffer();
-        if (flushedCompletely) {
+        boolean flushedCompletely = flushNetOutBuffer();// 发送数据
+        if (flushedCompletely) {// 如果全部发送完，则取消对OP_WRITE事件的关注
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
             if (pendingSaslState != null)
                 setSaslState(pendingSaslState);
         } else
+            // 如果未发送完成，继续关注
             transportLayer.addInterestOps(SelectionKey.OP_WRITE);
         return flushedCompletely;
     }
 
+    // 负责从SocketChannel中读取一个完成的消息
     private byte[] receiveResponseOrToken() throws IOException {
+        // 创建缓冲区
         if (netInBuffer == null) netInBuffer = new NetworkReceive(node);
-        netInBuffer.readFrom(transportLayer);
+        netInBuffer.readFrom(transportLayer);// 从SocketChannel中读取消息
         byte[] serverPacket = null;
+        // 如果读取到一个完成的消息，则返回读取的负载数据，否则返回null
         if (netInBuffer.complete()) {
             netInBuffer.payload().rewind();
             serverPacket = new byte[netInBuffer.payload().remaining()];
             netInBuffer.payload().get(serverPacket, 0, serverPacket.length);
+            // 清空缓冲区
             netInBuffer = null; // reset the networkReceive as we read all the data.
         }
         return serverPacket;
@@ -267,14 +312,17 @@ public class SaslClientAuthenticator implements Authenticator {
             throw new SaslException("Error authenticating with the Kafka Broker: received a `null` saslToken.");
 
         try {
+            // 初始化Response的处理
             if (isInitial && !saslClient.hasInitialResponse())
                 return saslToken;
             else
                 return Subject.doAs(subject, new PrivilegedExceptionAction<byte[]>() {
                     public byte[] run() throws SaslException {
+                        // 处理Challenge信息
                         return saslClient.evaluateChallenge(saslToken);
                     }
                 });
+            // 抛出异常
         } catch (PrivilegedActionException e) {
             String error = "An error: (" + e + ") occurred when evaluating SASL token received from the Kafka Broker.";
             // Try to provide hints to use about what went wrong so they can fix their configuration.
@@ -296,7 +344,7 @@ public class SaslClientAuthenticator implements Authenticator {
 
     private boolean flushNetOutBuffer() throws IOException {
         if (!netOutBuffer.completed()) {
-            netOutBuffer.writeTo(transportLayer);
+            netOutBuffer.writeTo(transportLayer);// 向SocketChannel中写数据
         }
         return netOutBuffer.completed();
     }

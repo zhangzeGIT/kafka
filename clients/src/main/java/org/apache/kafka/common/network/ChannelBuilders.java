@@ -51,6 +51,7 @@ public class ChannelBuilders {
                 channelBuilder = new SslChannelBuilder(mode);
                 break;
             case SASL_SSL:
+            // 配置的是SASL_PLIAINTEXT,所以创建SaslChannelBuilder对象
             case SASL_PLAINTEXT:
                 requireNonNullMode(mode, securityProtocol);
                 if (loginType == null)
@@ -67,6 +68,7 @@ public class ChannelBuilders {
                 throw new IllegalArgumentException("Unexpected securityProtocol " + securityProtocol);
         }
 
+        // 调用configure方法配置ChannelBuilder对象
         channelBuilder.configure(configs);
         return channelBuilder;
     }

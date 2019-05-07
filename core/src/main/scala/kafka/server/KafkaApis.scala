@@ -223,11 +223,16 @@ class KafkaApis(val requestChannel: RequestChannel,
   /**
    * Handle an offset commit request
    */
+  // 负责处理OffsetCommitRequest
+  //  首先，对请求进行权限验证，过滤掉当前MetadataCache中未知的Topic对应的offset信息
+  //  然后，根据OffsetCommitRequest的版本号决定记录offset的消息的超时时间
+  //  最后，创建OffsetAndMetadata对象，委托给GroupCoordinator.handleCommitOffsets方法处理
   def handleOffsetCommitRequest(request: RequestChannel.Request) {
     val header = request.header
     val offsetCommitRequest = request.body.asInstanceOf[OffsetCommitRequest]
 
     // reject the request if not authorized to the group
+    // 对请求进行权限验证
     if (!authorize(request.session, Read, new Resource(Group, offsetCommitRequest.groupId))) {
       val errorCode = new JShort(Errors.GROUP_AUTHORIZATION_FAILED.code)
       val results = offsetCommitRequest.offsetData.keySet.asScala.map { topicPartition =>
@@ -235,9 +240,11 @@ class KafkaApis(val requestChannel: RequestChannel,
       }.toMap
       val responseHeader = new ResponseHeader(header.correlationId)
       val responseBody = new OffsetCommitResponse(results.asJava)
+      // 验证失败，返回相应错误码
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
     } else {
       // filter non-existent topics
+      // 过滤掉当前MetadataCache中未知的Topic对应的offset信息
       val invalidRequestsInfo = offsetCommitRequest.offsetData.asScala.filter { case (topicPartition, _) =>
         !metadataCache.contains(topicPartition.topic)
       }
@@ -248,6 +255,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       // the callback for sending an offset commit response
+      //定义回调函数，主要负责创建OffsetCommitResponse，并放入RequestChannel等待发送
       def sendResponseCallback(commitStatus: immutable.Map[TopicPartition, Short]) {
         val mergedCommitStatus = commitStatus ++ unauthorizedRequestInfo.mapValues(_ => Errors.TOPIC_AUTHORIZATION_FAILED.code)
 
@@ -264,8 +272,11 @@ class KafkaApis(val requestChannel: RequestChannel,
         requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
       }
 
+      // 没有可用offset信息，调用回调方法
       if (authorizedRequestInfo.isEmpty)
         sendResponseCallback(Map.empty)
+      // 0表示使用旧版本请求
+      // 此时offset信息存储在ZK中，所以主要逻辑是ZK的写入，这与OffsetFetchRequest的处理类似
       else if (header.apiVersion == 0) {
         // for version 0 always store offsets to ZK
         val responseInfo = authorizedRequestInfo.map {
@@ -285,16 +296,19 @@ class KafkaApis(val requestChannel: RequestChannel,
             }
         }
         sendResponseCallback(responseInfo)
+        // 决定offset的消息的超时时长
       } else {
         // for version 1 and beyond store offsets in offset manager
 
         // compute the retention time based on the request version:
         // if it is v1 or not specified by user, we can use the default retention
         val offsetRetention =
-          if (header.apiVersion <= 1 ||
+        // 默认24小时
+        if (header.apiVersion <= 1 ||
             offsetCommitRequest.retentionTime == OffsetCommitRequest.DEFAULT_RETENTION_TIME)
             coordinator.offsetConfig.offsetsRetentionMs
           else
+            // 请求中指定的时长
             offsetCommitRequest.retentionTime
 
         // commit timestamp is always set to now.
@@ -303,10 +317,12 @@ class KafkaApis(val requestChannel: RequestChannel,
         //   - If v1 and no explicit commit timestamp is provided we use default expiration timestamp.
         //   - If v1 and explicit commit timestamp is provided we calculate retention from that explicit commit timestamp
         //   - If v2 we use the default expiration timestamp
+        // 根据配置的保留时间，或者每个分区指定的保留时间，计算出offset的过期清理的时间
         val currentTimestamp = SystemTime.milliseconds
         val defaultExpireTimestamp = offsetRetention + currentTimestamp
         val partitionData = authorizedRequestInfo.mapValues { partitionData =>
           val metadata = if (partitionData.metadata == null) OffsetMetadata.NoMetadata else partitionData.metadata;
+          // 创建OffsetAndMetadata对象
           new OffsetAndMetadata(
             offsetMetadata = OffsetMetadata(partitionData.offset, metadata),
             commitTimestamp = currentTimestamp,
@@ -320,6 +336,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
 
         // call coordinator to handle commit offset
+        // 将请求携带的信息和OffsetAndMetadata对象都交给GroupCoordinator处理
         coordinator.handleCommitOffsets(
           offsetCommitRequest.groupId,
           offsetCommitRequest.memberId,
@@ -1054,6 +1071,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     quotaManagers
   }
 
+  // 消费者离开Consumer Group，会调用unsubscribe方法取消对topic的订阅
   def handleLeaveGroupRequest(request: RequestChannel.Request) {
     val leaveGroupRequest = request.body.asInstanceOf[LeaveGroupRequest]
     val respHeader = new ResponseHeader(request.header.correlationId)
