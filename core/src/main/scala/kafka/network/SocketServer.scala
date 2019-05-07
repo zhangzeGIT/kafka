@@ -566,6 +566,7 @@ private[kafka] class Processor(val id: Int,
     }
   }
 
+  // 这个方法确认客户端的身份
   // 遍历队列，将NetworkReceives processorID，身份认证信息
   // 一起封装成RequestChannel.Request对象放入RequestChannel.requestQueue队列中
   // 等待handler线程处理

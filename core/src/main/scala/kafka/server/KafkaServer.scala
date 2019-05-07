@@ -157,6 +157,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
    */
+  // 通过反射创建指定的Authorizer对象
   def startup() {
     try {
       info("starting")
@@ -204,8 +205,10 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
         groupCoordinator.startup()
 
         /* Get the authorizer and initialize it if one is specified.*/
+        // 通过反射方式初始化authorizer.class配置项指定的Authorizer对象
         authorizer = Option(config.authorizerClassName).filter(_.nonEmpty).map { authorizerClassName =>
           val authZ = CoreUtils.createObject[Authorizer](authorizerClassName)
+          // 调用Authorizer。configure方法进行配置
           authZ.configure(config.originals())
           authZ
         }
