@@ -169,6 +169,8 @@ object RequestChannel extends Logging {
   }
 
   case class Response(processor: Int, request: Request, responseSend: Send, responseAction: ResponseAction) {
+    // KakfaApis处理完成会生成这个对象，放入RequestChannel中等待process处理
+    // 此时会更新对应的时间戳，用于监控
     request.responseCompleteTimeMs = SystemTime.milliseconds
 
     def this(processor: Int, request: Request, responseSend: Send) =
@@ -255,6 +257,7 @@ class RequestChannel(val numProcessors: Int, val queueSize: Int) extends KafkaMe
     requestQueue.take()
 
   /** Get a response for the given processor if there is one */
+  // Process线程
   def receiveResponse(processor: Int): RequestChannel.Response = {
     val response = responseQueues(processor).poll()
     if (response != null)
@@ -271,10 +274,14 @@ class RequestChannel(val numProcessors: Int, val queueSize: Int) extends KafkaMe
   }
 }
 
+// 使用Histogram统计各类请求和响应在RequestChannel中等待时间的分布
+// 如果有大量请求在RequestChannel中等待的时间过长，则需要进行调优
+// 例如：Handler线程配置过少，Kafka上下游的服务出现请求洪泛等都会导致问题
 object RequestMetrics {
   val metricsMap = new scala.collection.mutable.HashMap[String, RequestMetrics]
   val consumerFetchMetricName = ApiKeys.FETCH.name + "Consumer"
   val followFetchMetricName = ApiKeys.FETCH.name + "Follower"
+  // 对每种类型的请求创建对应的RequestMetrics对象
   (ApiKeys.values().toList.map(e => e.name)
     ++ List(consumerFetchMetricName, followFetchMetricName)).foreach(name => metricsMap.put(name, new RequestMetrics(name)))
 }
@@ -283,16 +290,21 @@ class RequestMetrics(name: String) extends KafkaMetricsGroup {
   val tags = Map("request" -> name)
   val requestRate = newMeter("RequestsPerSec", "requests", TimeUnit.SECONDS, tags)
   // time a request spent in a request queue
+  // 负责统计Request在RequestChannel的等待时间
   val requestQueueTimeHist = newHistogram("RequestQueueTimeMs", biased = true, tags)
+  // time a response spent in a response queue
+  // 统计Response在RequestChannel中等待的时间
+  val responseQueueTimeHist = newHistogram("ResponseQueueTimeMs", biased = true, tags)
   // time a request takes to be processed at the local broker
+  // 统计Request在当前Broker中处理的用时
   val localTimeHist = newHistogram("LocalTimeMs", biased = true, tags)
   // time a request takes to wait on remote brokers (currently only relevant to fetch and produce requests)
+  // 统计此Broker发送的Request在远端Broker中处理的用时，例如FetchRequest
   val remoteTimeHist = newHistogram("RemoteTimeMs", biased = true, tags)
   // time a request is throttled (only relevant to fetch and produce requests)
   val throttleTimeHist = newHistogram("ThrottleTimeMs", biased = true, tags)
-  // time a response spent in a response queue
-  val responseQueueTimeHist = newHistogram("ResponseQueueTimeMs", biased = true, tags)
   // time to send the response to the requester
+  // 统计发送Response的用时
   val responseSendTimeHist = newHistogram("ResponseSendTimeMs", biased = true, tags)
   val totalTimeHist = newHistogram("TotalTimeMs", biased = true, tags)
 }

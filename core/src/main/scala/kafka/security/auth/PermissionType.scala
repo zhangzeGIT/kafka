@@ -22,7 +22,7 @@ import kafka.common.{BaseEnum, KafkaException}
  * PermissionType.
  */
 
-
+// Allow Deny两种取值
 sealed trait PermissionType extends BaseEnum
 
 case object Allow extends PermissionType {

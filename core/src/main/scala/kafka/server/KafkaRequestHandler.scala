@@ -39,6 +39,7 @@ class KafkaRequestHandler(id: Int,
   def run() {
     while(true) {
       try {
+        // 从RequestChannel中读取Request
         var req : RequestChannel.Request = null
         while (req == null) {
           // We use a single meter for aggregate idle percentage for the thread pool.
@@ -59,6 +60,7 @@ class KafkaRequestHandler(id: Int,
             id, brokerId))
           return
         }
+        // 更新requestDequeueTimeMs:用于监控
         req.requestDequeueTimeMs = SystemTime.milliseconds
         trace("Kafka request handler %d on broker %d handling request %s".format(id, brokerId, req))
         // kafkaApis类中实现了处理请求的逻辑，KafkaApis还负责将响应写回对应的

@@ -38,33 +38,39 @@ trait KafkaMetricsGroup extends Logging {
    * @param tags Additional attributes which mBean will have.
    * @return Sanitized metric name object.
    */
+  // 按照一定的规则生成度量对象的MetricName，尤其注意其中MBean的名称
   private def metricName(name: String, tags: scala.collection.Map[String, String] = Map.empty) = {
+    // 当前类的class对象
     val klass = this.getClass
     val pkg = if (klass.getPackage == null) "" else klass.getPackage.getName
+    // 包名
     val simpleName = klass.getSimpleName.replaceAll("\\$$", "")
-
+    // 创建MetricsName
     explicitMetricName(pkg, simpleName, name, tags)
   }
 
 
   private def explicitMetricName(group: String, typeName: String, name: String, tags: scala.collection.Map[String, String] = Map.empty) = {
+    // 用于创建MBean的名称
     val nameBuilder: StringBuilder = new StringBuilder
-
+    // 第一部分是group，既包名
     nameBuilder.append(group)
-
+    // 第二部分是type，既类名
     nameBuilder.append(":type=")
 
     nameBuilder.append(typeName)
-
+    // 第三部分是name
     if (name.length > 0) {
       nameBuilder.append(",name=")
       nameBuilder.append(name)
     }
 
     val scope: String = KafkaMetricsGroup.toScope(tags).getOrElse(null)
+    // 遍历tags集合，以逗号分隔每个entry，形成字符串
     val tagsName = KafkaMetricsGroup.toMBeanName(tags)
     tagsName match {
       case Some(tn) =>
+        // 第四部分是tags
         nameBuilder.append(",").append(tn)
       case None =>
     }

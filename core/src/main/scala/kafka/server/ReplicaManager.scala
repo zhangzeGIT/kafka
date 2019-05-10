@@ -168,6 +168,8 @@ class ReplicaManager(val config: KafkaConfig,
       def value = underReplicatedPartitionCount()
     }
   )
+  // 使用Meter度量统计全部分区的ISR集合发生扩张和缩小的频率
+  // maybeExpandIsr中调用replicaManager.isrExpandRate.mark，标识发生了一次ISR集合扩张
   val isrExpandRate = newMeter("IsrExpandsPerSec",  "expands", TimeUnit.SECONDS)
   val isrShrinkRate = newMeter("IsrShrinksPerSec",  "shrinks", TimeUnit.SECONDS)
 

@@ -41,13 +41,12 @@ trait NotificationHandler {
  * The caller/user of this class should ensure that they use zkClient.subscribeStateChanges and call processAllNotifications
  * method of this class from ZkStateChangeListener's handleNewSession() method. This is necessary to ensure that if zk session
  * is terminated and reestablished any missed notification will be processed immediately.
- * @param zkUtils
- * @param seqNodeRoot
- * @param seqNodePrefix
- * @param notificationHandler
- * @param changeExpirationMs
- * @param time
  */
+// seqNodeRoot：指定监听的路径，这里的值是/kafka-acl-changes
+// seqNodePrefix：持久顺序节点的前缀，这里的值是acl_changes_
+// notificationHandler：seqNodeRoot路径下子节点集合发生变化时，执行响应操作
+// changeExpirationMs：顺序节点被创建后，超过changeExpirationMs指定的时间，则认为可以被删除，默认15分钟
+// lastExecutedChange：记录上次处理的顺序节点的编号
 class ZkNodeChangeNotificationListener(private val zkUtils: ZkUtils,
                                        private val seqNodeRoot: String,
                                        private val seqNodePrefix: String,
@@ -59,11 +58,16 @@ class ZkNodeChangeNotificationListener(private val zkUtils: ZkUtils,
 
   /**
    * create seqNodeRoot and begin watching for any new children nodes.
+   * 完成注册监听器的操作
    */
   def init() {
+    // 确保kafka-acl-changes节点存在
     zkUtils.makeSurePersistentPathExists(seqNodeRoot)
+    // 注册NodeChangeListener，监听节点
     zkUtils.zkClient.subscribeChildChanges(seqNodeRoot, NodeChangeListener)
+    // 监听ZK的链接状态变化
     zkUtils.zkClient.subscribeStateChanges(ZkStateChangeListener)
+    // 处理kafka-acl-changes的子节点
     processAllNotifications()
   }
 
@@ -74,6 +78,7 @@ class ZkNodeChangeNotificationListener(private val zkUtils: ZkUtils,
   /**
    * Process all changes
    */
+  // NodeChangeListener和ZkStateChangeListener被触发时，都会调用这个方法处理kafka-acl-changes的子节点
   def processAllNotifications() {
     val changes = zkUtils.zkClient.getChildren(seqNodeRoot)
     processNotifications(changes.asScala.sorted)
@@ -87,15 +92,21 @@ class ZkNodeChangeNotificationListener(private val zkUtils: ZkUtils,
       info(s"Processing notification(s) to $seqNodeRoot")
       try {
         val now = time.milliseconds
+        // 遍历子节点集合
         for (notification <- notifications) {
+          // 获取子节点编号
           val changeId = changeNumber(notification)
+          // 检测此子节点是否已经处理过
           if (changeId > lastExecutedChange) {
             val changeZnode = seqNodeRoot + "/" + notification
+            // 读取节点状态信息和其中记录的数据
             val (data, stat) = zkUtils.readDataMaybeNull(changeZnode)
+            // 调用这个方法，更新aclCache集合
             data map (notificationHandler.processNotification(_)) getOrElse (logger.warn(s"read null data from $changeZnode when processing notification $notification"))
           }
           lastExecutedChange = changeId
         }
+        // 删除过期节点
         purgeObsoleteNotifications(now, notifications)
       } catch {
         case e: ZkInterruptedException =>
@@ -113,10 +124,13 @@ class ZkNodeChangeNotificationListener(private val zkUtils: ZkUtils,
   private def purgeObsoleteNotifications(now: Long, notifications: Seq[String]) {
     for (notification <- notifications.sorted) {
       val notificationNode = seqNodeRoot + "/" + notification
+      // 读取节点状态信息和其中记录的数据
       val (data, stat) = zkUtils.readDataMaybeNull(notificationNode)
       if (data.isDefined) {
+        // 检测节点是否过期
         if (now - stat.getCtime > changeExpirationMs) {
           debug(s"Purging change notification $notificationNode")
+          // 删除节点
           zkUtils.deletePath(notificationNode)
         }
       }

@@ -90,6 +90,7 @@ object Acl {
  * @param host A value of * indicates all hosts.
  * @param operation A value of ALL indicates all operations.
  */
+// Operation：read write create delete alter describe clusterAction all
 case class Acl(principal: KafkaPrincipal, permissionType: PermissionType, host: String, operation: Operation) {
 
   /**

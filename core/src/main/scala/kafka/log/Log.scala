@@ -123,8 +123,10 @@ class Log(val dir: File,
 
   val tags = Map("topic" -> topicAndPartition.topic, "partition" -> topicAndPartition.partition.toString)
 
+  // 注册Gauge对象
   newGauge("NumLogSegments",
     new Gauge[Int] {
+      // 记录当前Log中的Segment对象个数
       def value = numberOfSegments
     },
     tags)
