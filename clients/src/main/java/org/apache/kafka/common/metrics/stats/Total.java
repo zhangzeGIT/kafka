@@ -18,6 +18,7 @@ import org.apache.kafka.common.metrics.MetricConfig;
 /**
  * An un-windowed cumulative total maintained over all time.
  */
+// MeasurableStat最简单的实现
 public class Total implements MeasurableStat {
 
     private double total;
@@ -30,11 +31,13 @@ public class Total implements MeasurableStat {
         this.total = value;
     }
 
+    // 完成累加
     @Override
     public void record(MetricConfig config, double value, long now) {
         this.total += value;
     }
 
+    // 返回累加值
     @Override
     public double measure(MetricConfig config, long now) {
         return this.total;

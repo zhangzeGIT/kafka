@@ -117,6 +117,7 @@ object RequestChannel extends Logging {
 
     trace("Processor %d received request : %s".format(processor, requestDesc(true)))
 
+    // 更新requestQueueTimeHist和responseQueueTimeHist
     def updateRequestMetrics() {
       val endTimeMs = SystemTime.milliseconds
       // In some corner cases, apiLocalCompleteTimeMs may not be set when the request completes if the remote
@@ -130,7 +131,9 @@ object RequestChannel extends Logging {
       if (apiRemoteCompleteTimeMs < 0)
         apiRemoteCompleteTimeMs = responseCompleteTimeMs
 
+      // 计算Request在RequestChannel中的等待时间
       val requestQueueTime = math.max(requestDequeueTimeMs - startTimeMs, 0)
+      // 计算Response在RequestChannel中的等待时间
       val apiLocalTime = math.max(apiLocalCompleteTimeMs - requestDequeueTimeMs, 0)
       val apiRemoteTime = math.max(apiRemoteCompleteTimeMs - apiLocalCompleteTimeMs, 0)
       val apiThrottleTime = math.max(responseCompleteTimeMs - apiRemoteCompleteTimeMs, 0)
@@ -150,10 +153,12 @@ object RequestChannel extends Logging {
       metricNames.foreach { metricName =>
         val m = RequestMetrics.metricsMap(metricName)
         m.requestRate.mark()
+        // 更新requestQueueTimeHist
         m.requestQueueTimeHist.update(requestQueueTime)
         m.localTimeHist.update(apiLocalTime)
         m.remoteTimeHist.update(apiRemoteTime)
         m.throttleTimeHist.update(apiThrottleTime)
+        // 更新responseQueueTimeHist
         m.responseQueueTimeHist.update(responseQueueTime)
         m.responseSendTimeHist.update(responseSendTime)
         m.totalTimeHist.update(totalTime)

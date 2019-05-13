@@ -25,10 +25,15 @@ import java.util.concurrent.TimeUnit;
  */
 public class MetricConfig {
 
+    // 定义了度量值的上下限，超过范围后抛出异常
     private Quota quota;
+    // 指定样本的个数，默认2
     private int samples;
+    // 指定每个样本中事件的上线，当一个样本中的事件数超过此值后，则开始下个样本的记录，默认值Long.MAX_VALUE
     private long eventWindow;
+    // 每个样本取样的时间窗口，默认三十秒
     private long timeWindowMs;
+    // 指定相关的Tag标签
     private Map<String, String> tags;
 
     public MetricConfig() {

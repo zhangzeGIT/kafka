@@ -44,6 +44,7 @@ public class JmxReporter implements MetricsReporter {
     private static final Logger log = LoggerFactory.getLogger(JmxReporter.class);
     private static final Object LOCK = new Object();
     private String prefix;
+    // KafkaMbean是一个DynamicMBean接口的实现
     private final Map<String, KafkaMbean> mbeans = new HashMap<String, KafkaMbean>();
 
     public JmxReporter() {
@@ -73,7 +74,9 @@ public class JmxReporter implements MetricsReporter {
     @Override
     public void metricChange(KafkaMetric metric) {
         synchronized (LOCK) {
+            // 添加KafkaMetric
             KafkaMbean mbean = addAttribute(metric);
+            // 重新注册KafkaMBean
             reregister(mbean);
         }
     }
@@ -103,10 +106,13 @@ public class JmxReporter implements MetricsReporter {
     private KafkaMbean addAttribute(KafkaMetric metric) {
         try {
             MetricName metricName = metric.metricName();
+            // 获取KafkaMBean的名称
             String mBeanName = getMBeanName(metricName);
+            // 如果没有此名称的KafkaMBean则创建
             if (!this.mbeans.containsKey(mBeanName))
                 mbeans.put(mBeanName, new KafkaMbean(mBeanName));
             KafkaMbean mbean = this.mbeans.get(mBeanName);
+            // 以属性的形式添加KafkaMetric
             mbean.setAttribute(metricName.name(), metric);
             return mbean;
         } catch (JMException e) {
@@ -161,7 +167,9 @@ public class JmxReporter implements MetricsReporter {
     }
 
     private static class KafkaMbean implements DynamicMBean {
+        // MBean名称
         private final ObjectName objectName;
+        // 保存了添加的KafkaMetric对象
         private final Map<String, KafkaMetric> metrics;
 
         public KafkaMbean(String mbeanName) throws MalformedObjectNameException {
@@ -173,6 +181,7 @@ public class JmxReporter implements MetricsReporter {
             return objectName;
         }
 
+        // 记录KafkaMetric对象
         public void setAttribute(String name, KafkaMetric metric) {
             this.metrics.put(name, metric);
         }
@@ -180,6 +189,7 @@ public class JmxReporter implements MetricsReporter {
         @Override
         public Object getAttribute(String name) throws AttributeNotFoundException, MBeanException, ReflectionException {
             if (this.metrics.containsKey(name))
+                // 返回指定KafkaMetric中的度量值
                 return this.metrics.get(name).value();
             else
                 throw new AttributeNotFoundException("Could not find attribute " + name);

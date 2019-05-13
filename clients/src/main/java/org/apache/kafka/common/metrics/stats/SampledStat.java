@@ -30,8 +30,11 @@ import org.apache.kafka.common.metrics.MetricConfig;
  */
 public abstract class SampledStat implements MeasurableStat {
 
+    // 样本的初始值
     private double initialValue;
+    // 当前使用的Sample的下标
     private int current = 0;
+    // 样本
     protected List<Sample> samples;
 
     public SampledStat(double initialValue) {
@@ -39,23 +42,32 @@ public abstract class SampledStat implements MeasurableStat {
         this.samples = new ArrayList<Sample>(2);
     }
 
+    // 根据时间窗口和事件数使用合适的Sample对象进行记录
     @Override
     public void record(MetricConfig config, double value, long timeMs) {
+        // 获取当前的sample对象
         Sample sample = current(timeMs);
+        // 检测当前的sample是否已完成取样
         if (sample.isComplete(timeMs, config))
+            // 获取下一个sample
             sample = advance(config, timeMs);
+        // 更新sample
         update(sample, config, value, timeMs);
+        // 增加事件数
         sample.eventCount += 1;
     }
 
+    // 根据配置指定的sample数量决定创建新sample还是使用之前的sample对象
     private Sample advance(MetricConfig config, long timeMs) {
         this.current = (this.current + 1) % config.samples();
         if (this.current >= samples.size()) {
+            // 创建新的sample对象
             Sample sample = newSample(timeMs);
             this.samples.add(sample);
             return sample;
         } else {
             Sample sample = current(timeMs);
+            // 重用之前的sample对象
             sample.reset(timeMs);
             return sample;
         }
@@ -65,6 +77,7 @@ public abstract class SampledStat implements MeasurableStat {
         return new Sample(this.initialValue, timeMs);
     }
 
+    // 会将获取的sample重置，之后调用combine
     @Override
     public double measure(MetricConfig config, long now) {
         purgeObsoleteSamples(config, now);
@@ -95,18 +108,24 @@ public abstract class SampledStat implements MeasurableStat {
 
     /* Timeout any windows that have expired in the absence of any events */
     protected void purgeObsoleteSamples(MetricConfig config, long now) {
+        // 计算过期时长
         long expireAge = config.samples() * config.timeWindowMs();
         for (int i = 0; i < samples.size(); i++) {
             Sample sample = this.samples.get(i);
             if (now - sample.lastWindowMs >= expireAge)
+                // 检测到sample过期，则将其重置
                 sample.reset(now);
         }
     }
 
     protected static class Sample {
+        // 初始值
         public double initialValue;
+        // 当前样本的事件数
         public long eventCount;
+        // 当前样本的时间窗口开始的时间戳
         public long lastWindowMs;
+        // 记录样本的值
         public double value;
 
         public Sample(double initialValue, long now) {
@@ -122,7 +141,9 @@ public abstract class SampledStat implements MeasurableStat {
             this.value = initialValue;
         }
 
+        // 通过检测eventCount和lastWindows决定当前样本是否已经取样完成
         public boolean isComplete(long timeMs, MetricConfig config) {
+            // 检测时间窗口，检测事件数
             return timeMs - lastWindowMs >= config.timeWindowMs() || eventCount >= config.eventWindow();
         }
     }

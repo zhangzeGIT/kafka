@@ -1753,6 +1753,7 @@ case class LeaderIsrAndControllerEpoch(leaderAndIsr: LeaderAndIsr, controllerEpo
 object ControllerStats extends KafkaMetricsGroup {
 
   private val _uncleanLeaderElectionRate = newMeter("UncleanLeaderElectionsPerSec", "elections", TimeUnit.SECONDS)
+  // 创建Timer对象
   private val _leaderElectionTimer = new KafkaTimer(newTimer("LeaderElectionRateAndTimeMs", TimeUnit.MILLISECONDS, TimeUnit.SECONDS))
 
   // KafkaServer needs to initialize controller metrics during startup. We perform initialization

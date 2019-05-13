@@ -25,23 +25,27 @@ public interface MetricsReporter extends Configurable {
      * This is called when the reporter is first registered to initially register all existing metrics
      * @param metrics All currently existing metrics
      */
+    // 初始化函数，将MetricsReporter添加到Metrics时调用，完成初始化
     public void init(List<KafkaMetric> metrics);
 
     /**
      * This is called whenever a metric is updated or added
      * @param metric
      */
+    // 向Metrics中添加KafkaMetric是调用
     public void metricChange(KafkaMetric metric);
 
     /**
      * This is called whenever a metric is removed
      * @param metric
      */
+    // 从Metrics中删除KafkaMetric时被调用
     public void metricRemoval(KafkaMetric metric);
 
     /**
      * Called when the metrics repository is closed.
      */
+    // 关闭操作
     public void close();
 
 }

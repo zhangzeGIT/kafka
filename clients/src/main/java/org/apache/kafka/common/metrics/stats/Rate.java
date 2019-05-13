@@ -26,6 +26,7 @@ import org.apache.kafka.common.metrics.MetricConfig;
  * however, to record the rate of occurrences (e.g. the count of values measured over the time interval) or other such
  * values.
  */
+// 用于记录比率，例如每秒钟创建连接的个数
 public class Rate implements MeasurableStat {
 
     private final TimeUnit unit;
@@ -52,6 +53,7 @@ public class Rate implements MeasurableStat {
         return unit.name().substring(0, unit.name().length() - 2).toLowerCase(Locale.ROOT);
     }
 
+    // 委托给其中封装的sampleStat对象
     @Override
     public void record(MetricConfig config, double value, long timeMs) {
         this.stat.record(config, value, timeMs);
@@ -59,12 +61,15 @@ public class Rate implements MeasurableStat {
 
     @Override
     public double measure(MetricConfig config, long now) {
+        // 获取stat的记录值
         double value = stat.measure(config, now);
+        // 记录值除以总时间，得到最终的比率，convert方法是根据rate设置的时间单位，对总时间进行转换
         return value / convert(windowSize(config, now));
     }
 
     public long windowSize(MetricConfig config, long now) {
         // purge old samples before we compute the window size
+        // 首先，重置所有已经过期的sample，他们不参与总时间的计算
         stat.purgeObsoleteSamples(config, now);
 
         /*
@@ -78,12 +83,16 @@ public class Rate implements MeasurableStat {
          * but this approach does not account for sleeps. SampledStat only creates samples whenever record is called,
          * if no record is called for a period of time that time is not accounted for in windowSize and produces incorrect results.
          */
+        // 通过sampledStat.oldest方法获取最旧的sample对象，从而计算总时间
         long totalElapsedTimeMs = now - stat.oldest(now).lastWindowMs;
         // Check how many full windows of data we have currently retained
+        // 有多少个完整的时间窗口，即有多少个完成的sample
         int numFullWindows = (int) (totalElapsedTimeMs / config.timeWindowMs());
+        // 计算最小要求的完整窗口
         int minFullWindows = config.samples() - 1;
 
         // If the available windows are less than the minimum required, add the difference to the totalElapsedTime
+        // 对总时间进行补偿
         if (numFullWindows < minFullWindows)
             totalElapsedTimeMs += (minFullWindows - numFullWindows) * config.timeWindowMs();
 
