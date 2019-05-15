@@ -27,7 +27,17 @@ import org.apache.kafka.common.security.JaasUtils
 
 object PreferredReplicaLeaderElectionCommand extends Logging {
 
+  // path-to-json-file餐宿指定一个优先副本选举的分区，该JSON格式的输入文件示例如下：
+  // {
+  //    "partitions":[{
+  //      "topic":"foo","partition":1
+  //    },{
+  //      "topic":"foobar","partition":2
+  //    }]
+  // }
+  // 未指定输入文件，默认所有分区都需要进行优先副本选举操作
   def main(args: Array[String]): Unit = {
+    // 检测path-to-json-file参数个ZK参数
     val parser = new OptionParser
     val jsonFileOpt = parser.accepts("path-to-json-file", "The JSON file with the list of partitions " +
       "for which preferred replica leader election should be done, in the following format - \n" +
@@ -54,18 +64,24 @@ object PreferredReplicaLeaderElectionCommand extends Logging {
     var zkClient: ZkClient = null
     var zkUtils: ZkUtils = null
     try {
+      // 创建ZK的链接
       zkClient = ZkUtils.createZkClient(zkConnect, 30000, 30000)
       zkUtils = ZkUtils(zkConnect, 
                         30000,
                         30000,
                         JaasUtils.isZkSecurityEnabled())
+      // 获取需要进行优先副本选举的分区集合
       val partitionsForPreferredReplicaElection =
+      // 未指定path-to-json-file参数则返回全部分区
         if (!options.has(jsonFileOpt))
           zkUtils.getAllPartitions()
         else
+        // 解析json参数
           parsePreferredReplicaElectionData(Utils.readFileAsString(options.valueOf(jsonFileOpt)))
+      // 创建这个对象
       val preferredReplicaElectionCommand = new PreferredReplicaLeaderElectionCommand(zkUtils, partitionsForPreferredReplicaElection)
 
+      // 将指定的分区写入到ZK中的/admin/preferred_replica_election节点中
       preferredReplicaElectionCommand.moveLeaderToPreferredReplica()
       println("Successfully started preferred replica election for partitions %s".format(partitionsForPreferredReplicaElection))
     } catch {
@@ -100,10 +116,13 @@ object PreferredReplicaLeaderElectionCommand extends Logging {
     }
   }
 
+  // 将需要进行优先副本选举的分区写入ZK
   def writePreferredReplicaElectionData(zkUtils: ZkUtils,
                                         partitionsUndergoingPreferredReplicaElection: scala.collection.Set[TopicAndPartition]) {
+    // /admin/preferred_replica_election节点的路径
     val zkPath = ZkUtils.PreferredReplicaLeaderElectionPath
     val partitionsList = partitionsUndergoingPreferredReplicaElection.map(e => Map("topic" -> e.topic, "partition" -> e.partition))
+    // 转换成JSON格式
     val jsonData = Json.encode(Map("version" -> 1, "partitions" -> partitionsList))
     try {
       zkUtils.createPersistentPath(zkPath, jsonData)
@@ -121,6 +140,8 @@ object PreferredReplicaLeaderElectionCommand extends Logging {
 
 class PreferredReplicaLeaderElectionCommand(zkUtils: ZkUtils, partitions: scala.collection.Set[TopicAndPartition])
   extends Logging {
+  // 首先，检测指定的topic是否包含指定的分区
+  // 之后，调用wpred方法，将需要进行优先副本选举的分区信息写入ZK
   def moveLeaderToPreferredReplica() = {
     try {
       val validPartitions = partitions.filter(p => validatePartition(zkUtils, p.topic, p.partition))

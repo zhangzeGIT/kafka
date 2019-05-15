@@ -60,14 +60,19 @@ import scala.util.control.ControlThrowable
  *       3. Mirror Maker Setting:
  *            abort.on.send.failure=true
  */
+// 两个Kafka集群中的数据同步
+// 基本原理是通过消费者从源集群中获取消息，在通过生产者将消息追加到目的集群中
 object MirrorMaker extends Logging with KafkaMetricsGroup {
 
   private var producer: MirrorMakerProducer = null
   private var mirrorMakerThreads: Seq[MirrorMakerThread] = null
   private val isShuttingdown: AtomicBoolean = new AtomicBoolean(false)
   // Track the messages not successfully sent by mirror maker.
+  // 发送失败的消息个数
   private val numDroppedMessages: AtomicInteger = new AtomicInteger(0)
+  // 从源集群拉取消息到本地后，会先经过这个处理，在发送给目的集群
   private var messageHandler: MirrorMakerMessageHandler = null
+  // 指定生产者进行flush操作和提交offset的周期
   private var offsetCommitIntervalMs = 0
   private var abortOnSendFailure: Boolean = true
   @volatile private var exitingOnSendFailure: Boolean = false
@@ -84,6 +89,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
 
     info("Starting mirror maker")
     try {
+      // 解析命令行参数
       val parser = new OptionParser
 
       val consumerConfigOpt = parser.accepts("consumer.config",
@@ -194,6 +200,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       offsetCommitIntervalMs = options.valueOf(offsetCommitIntervalMsOpt).intValue()
       val numStreams = options.valueOf(numStreamsOpt).intValue()
 
+      // 设置JVM关闭钩子
       Runtime.getRuntime.addShutdownHook(new Thread("MirrorMakerShutdownHook") {
         override def run() {
           cleanShutdown()
@@ -201,6 +208,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       })
 
       // create producer
+      // 获取生产者相关的配置
       val producerProps = Utils.loadProps(options.valueOf(producerConfigOpt))
       // Defaults to no data loss settings.
       maybeSetDefaultProperty(producerProps, ProducerConfig.RETRIES_CONFIG, Int.MaxValue.toString)
@@ -210,9 +218,11 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       // Always set producer key and value serializer to ByteArraySerializer.
       producerProps.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
       producerProps.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
+      // 创建MirrorMarkerProducer
       producer = new MirrorMakerProducer(producerProps)
 
       // Create consumers
+      // 创建消费者
       val mirrorMakerConsumers = if (!useNewConsumer) {
         val customRebalanceListener = {
           val customRebalanceListenerClass = options.valueOf(consumerRebalanceListenerOpt)
@@ -228,6 +238,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
           }
         }
 
+        // 旧consumer
         if (customRebalanceListener.exists(!_.isInstanceOf[ConsumerRebalanceListener]))
           throw new IllegalArgumentException("The rebalance listener should be an instance of kafka.consumer.ConsumerRebalanceListener")
         createOldConsumers(
@@ -237,6 +248,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
           Option(options.valueOf(whitelistOpt)),
           Option(options.valueOf(blacklistOpt)))
       } else {
+        // 根据consumer.rebalance.listener参数决定是否创建ConsumerRebalanceListener
         val customRebalanceListener = {
           val customRebalanceListenerClass = options.valueOf(consumerRebalanceListenerOpt)
           if (customRebalanceListenerClass != null) {
@@ -254,17 +266,19 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
           throw new IllegalArgumentException("The rebalance listener should be an instance of" +
             "org.apache.kafka.clients.consumer.ConsumerRebalanceListner")
         createNewConsumers(
-          numStreams,
-          options.valueOf(consumerConfigOpt),
+          numStreams,// 消费者个数
+          options.valueOf(consumerConfigOpt),// 消费者相关配置
           customRebalanceListener,
-          Option(options.valueOf(whitelistOpt)))
+          Option(options.valueOf(whitelistOpt)))// 白名单
       }
 
       // Create mirror maker threads.
+      // 创建这个线程，与消费者一一对应
       mirrorMakerThreads = (0 until numStreams) map (i =>
         new MirrorMakerThread(mirrorMakerConsumers(i), i))
 
       // Create and initialize message handler
+      // 根据message.handler参数创建并初始化MessageHandler
       val customMessageHandlerClass = options.valueOf(messageHandlerOpt)
       val messageHandlerArgs = options.valueOf(messageHandlerArgsOpt)
       messageHandler = {
@@ -283,7 +297,9 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         error("Exception when starting mirror maker.", t)
     }
 
+    // 启动MirrorMakerThread线程
     mirrorMakerThreads.foreach(_.start())
+    // 主线程阻塞，等待MirrorMakerThread线程全部结束
     mirrorMakerThreads.foreach(_.awaitShutdown())
   }
 
@@ -327,6 +343,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
                          customRebalanceListener: Option[org.apache.kafka.clients.consumer.ConsumerRebalanceListener],
                          whitelist: Option[String]) : Seq[MirrorMakerBaseConsumer] = {
     // Create consumer connector
+    // 获取consumer相关配置
     val consumerConfigProps = Utils.loadProps(consumerConfigPath)
     // Disable consumer auto offsets commit to prevent data loss.
     maybeSetDefaultProperty(consumerConfigProps, "enable.auto.commit", "false")
@@ -335,10 +352,12 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     consumerConfigProps.setProperty("value.deserializer", classOf[ByteArrayDeserializer].getName)
     // The default client id is group id, we manually set client id to groupId-index to avoid metric collision
     val groupIdString = consumerConfigProps.getProperty("group.id")
+    // 创建指定数量的KafkaConsumer对象
     val consumers = (0 until numStreams) map { i =>
       consumerConfigProps.setProperty("client.id", groupIdString + "-" + i.toString)
       new KafkaConsumer[Array[Byte], Array[Byte]](consumerConfigProps)
     }
+    // 检测是否指定白名单，白名单指明了需要进行镜像的topic
     whitelist.getOrElse(throw new IllegalArgumentException("White list cannot be empty for new consumer"))
     consumers.map(consumer => new MirrorMakerNewConsumer(consumer, customRebalanceListener, whitelist))
   }
@@ -399,9 +418,14 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
 
     setName(threadName)
 
+    // 首先调用对应Consumer对象的receive方法获取消息
+    // 然后，将消息交给MirrorMakerMessageHandler.handle方法处理
+    // 之后，将消息追加到目的集群中
+    // 在这个过程中，会按照offset.commit.interval.ms参数指定的时间间隔提交offset
     override def run() {
       info("Starting mirror maker thread " + threadName)
       try {
+        // 初始化MirrorMakerNewConsumer
         mirrorMakerConsumer.init()
 
         // We need the two while loop to make sure when old consumer is used, even there is no message we
@@ -409,10 +433,14 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         while (!exitingOnSendFailure && !shuttingDown) {
           try {
             while (!exitingOnSendFailure && !shuttingDown && mirrorMakerConsumer.hasData) {
+              // 从源集群中获取消息
               val data = mirrorMakerConsumer.receive()
               trace("Sending message with value size %d and offset %d".format(data.value.length, data.offset))
+              // 通过MirrorMakerMessageHandler创建ProducerRecord
               val records = messageHandler.handle(data)
+              // 发送消息
               records.foreach(producer.send)
+              // 尝试提交offset
               maybeFlushAndCommitOffsets()
             }
           } catch {
@@ -427,6 +455,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         case t: Throwable =>
           fatal("Mirror maker thread failure due to ", t)
       } finally {
+        // 关闭producer和consumer，提交offset，尝试唤醒主线程
         CoreUtils.swallow {
           info("Flushing producer.")
           producer.flush()
@@ -450,9 +479,12 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     }
 
     def maybeFlushAndCommitOffsets() {
+      // 满足offset.commit.interval.ms参数指定的时间间隔，才提交一次offset
       if (System.currentTimeMillis() - lastOffsetCommitMs > offsetCommitIntervalMs) {
         debug("Committing MirrorMaker state automatically.")
+        // 将KafkaProducer缓冲的消息发送出去
         producer.flush()
+        // 提交MirrorMakerNewConsumer.offsets集合中记录的offset
         commitOffsets(mirrorMakerConsumer)
         lastOffsetCommitMs = System.currentTimeMillis()
       }
@@ -534,13 +566,16 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     // TODO: we need to manually maintain the consumed offsets for new consumer
     // since its internal consumed position is updated in batch rather than one
     // record at a time, this can be resolved when we break the unification of both consumers
+    // 使用offsets维护自己offset
     private val offsets = new HashMap[TopicPartition, Long]()
 
     override def init() {
       debug("Initiating new consumer")
+      // 创建这个对象
       val consumerRebalanceListener = new InternalRebalanceListenerForNewConsumer(this, customRebalanceListener)
       if (whitelistOpt.isDefined) {
         try {
+          // 订阅白名单指定的topic
           consumer.subscribe(Pattern.compile(whitelistOpt.get), consumerRebalanceListener)
         } catch {
           case pse: PatternSyntaxException =>
@@ -554,6 +589,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
 
     override def receive() : BaseConsumerRecord = {
       if (recordIter == null || !recordIter.hasNext) {
+        // 从源集群中拉取消息
         recordIter = consumer.poll(1000).iterator
         if (!recordIter.hasNext)
           throw new ConsumerTimeoutException
@@ -562,8 +598,10 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       val record = recordIter.next()
       val tp = new TopicPartition(record.topic, record.partition)
 
+      // 记录消费的offset
       offsets.put(tp, record.offset + 1)
 
+      // 返回从源集群中拉取的消息
       BaseConsumerRecord(record.topic,
                          record.partition,
                          record.offset,
@@ -587,13 +625,17 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     }
   }
 
+  // 在rebalance操作之前会将offsets字段中记录的offset进行提交
   private class InternalRebalanceListenerForNewConsumer(mirrorMakerConsumer: MirrorMakerBaseConsumer,
                                                         customRebalanceListenerForNewConsumer: Option[org.apache.kafka.clients.consumer.ConsumerRebalanceListener])
     extends org.apache.kafka.clients.consumer.ConsumerRebalanceListener {
 
     override def onPartitionsRevoked(partitions: util.Collection[TopicPartition]) {
+      // 将KafkaProducer缓存的消息全部发送到目的集群
       producer.flush()
+      // 提交offsets集合中记录的offset
       commitOffsets(mirrorMakerConsumer)
+      // 指定consumer.rebalance.listener参数指定的ConsumerRebalanceListener实现自定义的功能
       customRebalanceListenerForNewConsumer.foreach(_.onPartitionsRevoked(partitions))
     }
 
@@ -656,11 +698,15 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         // still could not be sent.
         super.onCompletion(metadata, exception)
         // If abort.on.send.failure is set, stop the mirror maker. Otherwise log skipped message and move on.
+        // 如果设置了abort.on.send.failure参数，则停止MirrorMaker
+        // 否则忽略异常，继续发送后面的消息
         if (abortOnSendFailure) {
           info("Closing producer due to send failure.")
+          // 设置为true后会通知全部MirrorMakerThread停止
           exitingOnSendFailure = true
           producer.close(0)
         }
+        // 记录发送失败的消息数量
         numDroppedMessages.incrementAndGet()
       }
     }

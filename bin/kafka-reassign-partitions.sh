@@ -14,4 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# PartitionsReassignedListener，他会监听ZK中的/admin/reassign_partitions节点
+# 负责进行分区中副本的重新分配
 exec $(dirname $0)/kafka-run-class.sh kafka.admin.ReassignPartitionsCommand "$@"

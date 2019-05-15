@@ -131,19 +131,28 @@ object AdminUtils extends Logging {
                                                  brokerList: Seq[Int],
                                                  fixedStartIndex: Int,
                                                  startPartitionId: Int): Map[Int, Seq[Int]] = {
+    // 记录副本分配结果
     val ret = mutable.Map[Int, Seq[Int]]()
     val brokerArray = brokerList.toArray
+    // 选择起始broker进行分配
     val startIndex = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(brokerArray.length)
+    // 选择起始分区
     var currentPartitionId = math.max(0, startPartitionId)
+    // 指定了副本的间隔，目的是为了更均匀地将副本分配到不同的broker上
     var nextReplicaShift = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(brokerArray.length)
     for (_ <- 0 until nPartitions) {
       if (currentPartitionId > 0 && (currentPartitionId % brokerArray.length == 0))
+      // 递增nextReplicaShift
         nextReplicaShift += 1
+      // 记录优先副本分配到startIndex指定的broker之上
       val firstReplicaIndex = (currentPartitionId + startIndex) % brokerArray.length
+      // 记录优先副本的分配结果
       val replicaBuffer = mutable.ArrayBuffer(brokerArray(firstReplicaIndex))
+      // 分配当前分区的其他副本
       for (j <- 0 until replicationFactor - 1)
         replicaBuffer += brokerArray(replicaIndex(firstReplicaIndex, nextReplicaShift, j, brokerArray.length))
       ret.put(currentPartitionId, replicaBuffer)
+      // 分配下一个分区
       currentPartitionId += 1
     }
     ret
@@ -154,39 +163,58 @@ object AdminUtils extends Logging {
                                                brokerMetadatas: Seq[BrokerMetadata],
                                                fixedStartIndex: Int,
                                                startPartitionId: Int): Map[Int, Seq[Int]] = {
+    // 对机架信息进行转换
     val brokerRackMap = brokerMetadatas.collect { case BrokerMetadata(id, Some(rack)) =>
       id -> rack
     }.toMap
+    // 统计机架的个数
     val numRacks = brokerRackMap.values.toSet.size
+    // 基于机架信息生成一个broker列表，不同机架的broker交替出现
     val arrangedBrokerList = getRackAlternatedBrokerList(brokerRackMap)
     val numBrokers = arrangedBrokerList.size
+    // 用于记录副本分配结果
     val ret = mutable.Map[Int, Seq[Int]]()
+    // 计算起始broker进行分配
     val startIndex = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(arrangedBrokerList.size)
+    // 选择起始分区
     var currentPartitionId = math.max(0, startPartitionId)
     var nextReplicaShift = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(arrangedBrokerList.size)
     for (_ <- 0 until nPartitions) {
       if (currentPartitionId > 0 && (currentPartitionId % arrangedBrokerList.size == 0))
         nextReplicaShift += 1
+      // 计算优先副本所在的broker
       val firstReplicaIndex = (currentPartitionId + startIndex) % arrangedBrokerList.size
       val leader = arrangedBrokerList(firstReplicaIndex)
+      // 记录优先副本所在的broker
       val replicaBuffer = mutable.ArrayBuffer(leader)
+      // 记录已经分配了当前分区的副本的机架信息
       val racksWithReplicas = mutable.Set(brokerRackMap(leader))
+      // 记录已经分配了当前分区的副本的broker信息
       val brokersWithReplicas = mutable.Set(leader)
       var k = 0
       for (_ <- 0 until replicationFactor - 1) {
         var done = false
         while (!done) {
+          // 通过replicaIndex方法计算当前副本所在的broker
           val broker = arrangedBrokerList(replicaIndex(firstReplicaIndex, nextReplicaShift * numRacks, k, arrangedBrokerList.size))
           val rack = brokerRackMap(broker)
           // Skip this broker if
           // 1. there is already a broker in the same rack that has assigned a replica AND there is one or more racks
           //    that do not have any replica, or
           // 2. the broker has already assigned a replica AND there is one or more brokers that do not have replica assigned
+          // 检测是否跳过此broker，满足以下条件会跳过
+          // 1、当前机架已经分配过其他副本，而且存在机架还未分配副本
+          // 2、当前broker上已经分配过其他副本，而且存在其他broker还未分配副本
           if ((!racksWithReplicas.contains(rack) || racksWithReplicas.size == numRacks)
               && (!brokersWithReplicas.contains(broker) || brokersWithReplicas.size == numBrokers)) {
+            // 记录分配结果
             replicaBuffer += broker
+            // 记录此机架已经分配了当前partition的副本
             racksWithReplicas += rack
+
+            // 记录此broker已经分配了当前partition的副本
             brokersWithReplicas += broker
+            // 标识完成此副本的分配
             done = true
           }
           k += 1
@@ -243,47 +271,60 @@ object AdminUtils extends Logging {
   * @param replicaAssignmentStr Manual replica assignment
   * @param checkBrokerAvailable Ignore checking if assigned replica broker is available. Only used for testing
   */
-  def addPartitions(zkUtils: ZkUtils,
+ // 根据原有分区的分配情况确定副本个数
+ // 根据是否指定replica-assignment参数决定新增分区是否进行自动副本分配
+ // 最后将原分区和新增的partition的副本分配结果合并后写入ZK
+ def addPartitions(zkUtils: ZkUtils,
                     topic: String,
                     numPartitions: Int = 1,
                     replicaAssignmentStr: String = "",
                     checkBrokerAvailable: Boolean = true,
                     rackAwareMode: RackAwareMode = RackAwareMode.Enforced) {
-    val existingPartitionsReplicaList = zkUtils.getReplicaAssignmentForTopics(List(topic))
+   // 从ZK获取此topic当前的副本分配情况
+   val existingPartitionsReplicaList = zkUtils.getReplicaAssignmentForTopics(List(topic))
     if (existingPartitionsReplicaList.size == 0)
       throw new AdminOperationException("The topic %s does not exist".format(topic))
 
-    val existingReplicaListForPartitionZero = existingPartitionsReplicaList.find(p => p._1.partition == 0) match {
+   // 获取分区0的副本分配情况
+   val existingReplicaListForPartitionZero = existingPartitionsReplicaList.find(p => p._1.partition == 0) match {
       case None => throw new AdminOperationException("the topic does not have partition with id 0, it should never happen")
       case Some(headPartitionReplica) => headPartitionReplica._2
     }
+   // 获取分区0的副本数量
     val partitionsToAdd = numPartitions - existingPartitionsReplicaList.size
+   // 只能增加分区数量，如果指定的分区数量小于当前分区数，则抛异常
     if (partitionsToAdd <= 0)
       throw new AdminOperationException("The number of partitions for a topic can only be increased")
 
     // create the new partition replication list
-    val brokerMetadatas = getBrokerMetadatas(zkUtils, rackAwareMode)
+   val brokerMetadatas = getBrokerMetadatas(zkUtils, rackAwareMode)
     val newPartitionReplicaList =
       if (replicaAssignmentStr == null || replicaAssignmentStr == "") {
+        // 确定startIndex
         val startIndex = math.max(0, brokerMetadatas.indexWhere(_.id >= existingReplicaListForPartitionZero.head))
+        // 对新增分区进行副本自动分配
         AdminUtils.assignReplicasToBrokers(brokerMetadatas, partitionsToAdd, existingReplicaListForPartitionZero.size,
           startIndex, existingPartitionsReplicaList.size)
       }
       else
+        // 解析replica-assignment参数，其中会进行一系列有效性检测
         getManualReplicaAssignment(replicaAssignmentStr, brokerMetadatas.map(_.id).toSet,
           existingPartitionsReplicaList.size, checkBrokerAvailable)
 
     // check if manual assignment has the right replication factor
-    val unmatchedRepFactorList = newPartitionReplicaList.values.filter(p => (p.size != existingReplicaListForPartitionZero.size))
+    // 检测新增partition的副本数是否正常
+   val unmatchedRepFactorList = newPartitionReplicaList.values.filter(p => (p.size != existingReplicaListForPartitionZero.size))
     if (unmatchedRepFactorList.size != 0)
       throw new AdminOperationException("The replication factor in manual replication assignment " +
         " is not equal to the existing replication factor for the topic " + existingReplicaListForPartitionZero.size)
 
     info("Add partition list for %s is %s".format(topic, newPartitionReplicaList))
-    val partitionReplicaList = existingPartitionsReplicaList.map(p => p._1.partition -> p._2)
+   // 将原有分区与新增分区的副本分配整理成集合
+   val partitionReplicaList = existingPartitionsReplicaList.map(p => p._1.partition -> p._2)
     // add the new list
     partitionReplicaList ++= newPartitionReplicaList
-    AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, topic, partitionReplicaList, update = true)
+   // 将最终的副本分配结果写入ZK，注意最后一个参数的值，这里只更新副本分配情况
+   AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, topic, partitionReplicaList, update = true)
   }
 
   def getManualReplicaAssignment(replicaAssignmentList: String, availableBrokerList: Set[Int], startPartitionId: Int, checkBrokerAvailable: Boolean = true): Map[Int, List[Int]] = {
@@ -393,6 +434,12 @@ object AdminUtils extends Logging {
     brokerMetadatas.sortBy(_.id)
   }
 
+  // 首先从ZK中获取broker信息并封装成BrokerMetadata
+  //  BrokerMetadata中包含brokerID和rack机架信息
+  // 之后调动assignReplicasToBrokers方法，根据上述broker信息和命令参数进行自动分配
+  // 对于不需要机架感知的分配调用assignReplicasToBrokersRackUnaware方法处理
+  //       需要                  assignReplicasToBrokersRackAware
+  // 最后将分配结果写入ZK中
   def createTopic(zkUtils: ZkUtils,
                   topic: String,
                   partitions: Int,
@@ -410,11 +457,14 @@ object AdminUtils extends Logging {
                                                      config: Properties = new Properties,
                                                      update: Boolean = false) {
     // validate arguments
+    // 检测topic名称，检测所有分区的副本数是一致的
     Topic.validate(topic)
     require(partitionReplicaAssignment.values.map(_.size).toSet.size == 1, "All partitions should have the same number of replicas.")
 
+    // 获取当前Topic在ZK中对应的存储路径，既 /brokers/topics/[topic_name]
     val topicPath = getTopicPath(topic)
 
+    // 对于新创建的topic，需要检测ZK中是否已存在了同名topic
     if (!update) {
       if (zkUtils.zkClient.exists(topicPath))
         throw new TopicExistsException("Topic \"%s\" already exists.".format(topic))
@@ -427,9 +477,11 @@ object AdminUtils extends Logging {
       }
     }
 
+    // 检测是否存在对是否出现同一个broker上分配多个副本的情况
     partitionReplicaAssignment.values.foreach(reps => require(reps.size == reps.toSet.size, "Duplicate replica assignment found: "  + partitionReplicaAssignment))
 
     // Configs only matter if a topic is being created. Changing configs via AlterTopic is not supported
+    // 在创建topic时，会将config写入ZK
     if (!update) {
       // write out the config if there is any, this isn't transactional with the partition assignments
       LogConfig.validate(config)
@@ -437,6 +489,7 @@ object AdminUtils extends Logging {
     }
 
     // create the partition assignment
+    // 将副本的分配转换成JSON格式写入ZK
     writeTopicPartitionAssignment(zkUtils, topic, partitionReplicaAssignment, update)
   }
 
@@ -634,6 +687,7 @@ object AdminUtils extends Logging {
     brokerMetadata.filter(_.isDefined).map(_.get)
   }
 
+  // 分配其他副本通过replicaIndex方法实现
   private def replicaIndex(firstReplicaIndex: Int, secondReplicaShift: Int, replicaIndex: Int, nBrokers: Int): Int = {
     val shift = 1 + (secondReplicaShift + replicaIndex) % (nBrokers - 1)
     (firstReplicaIndex + shift) % nBrokers

@@ -104,6 +104,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
         config.saslMechanismInterBrokerProtocol,
         config.saslInterBrokerHandshakeRequestEnable
       )
+      // 创建Selector对象，第三个参数是metrics，KafkaServer启动时创建
       val selector = new Selector(
         NetworkReceive.UNLIMITED,
         config.connectionsMaxIdleMs,
@@ -131,6 +132,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
       case Some(name) => "%s:Controller-%d-to-broker-%d-send-thread".format(name, config.brokerId, broker.id)
     }
 
+    // 创建一个RequestSendThread线程
     val requestThread = new RequestSendThread(config.brokerId, controllerContext, messageQueue, networkClient,
       brokerNode, config, time, threadName)
     requestThread.setDaemon(false)

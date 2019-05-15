@@ -34,17 +34,22 @@ object ConsoleProducer {
   def main(args: Array[String]) {
 
     try {
+        // 读取命令行参数进行解析
         val config = new ProducerConfig(args)
+        // 创建LineMessageReader对象
         val reader = Class.forName(config.readerClass).newInstance().asInstanceOf[MessageReader]
+        // 初始化对象
         reader.init(System.in, getReaderProps(config))
 
         val producer =
           if(config.useOldProducer) {
             new OldProducer(getOldProducerProps(config))
           } else {
+            // 重点分析新版本的Producer
             new NewShinyProducer(getNewProducerProps(config))
           }
 
+        // 添加JVM关闭钩子
         Runtime.getRuntime.addShutdownHook(new Thread() {
           override def run() {
             producer.close()
@@ -53,8 +58,10 @@ object ConsoleProducer {
 
         var message: ProducerRecord[Array[Byte], Array[Byte]] = null
         do {
+          // 读取控制台数据，形成producerRecord
           message = reader.readMessage()
           if (message != null)
+          // 发送消息
             producer.send(message.topic, message.key, message.value)
         } while (message != null)
     } catch {

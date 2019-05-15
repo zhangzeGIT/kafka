@@ -38,9 +38,13 @@ import org.apache.kafka.common.utils.Utils
 import scala.collection.JavaConverters._
 import scala.collection.{Set, mutable}
 
+// 查询所有Consumer Group
+// 获取某个Consumer Group的信息信息
+// 删除某个Consumer Group
 object ConsumerGroupCommand {
 
   def main(args: Array[String]) {
+    // 检测参数个数，list，describe，delete，同时出现多个，抛异常
     val opts = new ConsumerGroupCommandOptions(args)
 
     if (args.length == 0)
@@ -53,19 +57,25 @@ object ConsumerGroupCommand {
 
     opts.checkArgs()
 
+    // 通过new-consumer参数指定使用新版本还是旧版本的消费者
     val consumerGroupService = {
+      // 新版本
       if (opts.options.has(opts.newConsumerOpt)) new KafkaConsumerGroupService(opts)
+      // 旧版本
       else new ZkConsumerGroupService(opts)
     }
 
     try {
       if (opts.options.has(opts.listOpt))
+      // 输出全部的consumer Group的id
         consumerGroupService.list()
       else if (opts.options.has(opts.describeOpt))
+      // 获取指定ConsumerGroup的描述信息
         consumerGroupService.describe()
       else if (opts.options.has(opts.deleteOpt)) {
         consumerGroupService match {
           case service: ZkConsumerGroupService => service.delete()
+          // 新版本消费者对应的serveic，不支持删除Consumer Group操作
           case _ => throw new IllegalStateException(s"delete is not supported for $consumerGroupService")
         }
       }
@@ -302,29 +312,37 @@ object ConsumerGroupCommand {
 
   class KafkaConsumerGroupService(val opts: ConsumerGroupCommandOptions) extends ConsumerGroupService {
 
+    // list describe方法中都是通过调用AdminClient的对应方法实现的
     private val adminClient = createAdminClient()
 
     // `consumer` is only needed for `describe`, so we instantiate it lazily
+    // 只有describe方法中会用到，会延迟创建
     private var consumer: KafkaConsumer[String, String] = null
 
     def list() {
       adminClient.listAllConsumerGroupsFlattened().foreach(x => println(x.groupId))
     }
 
+    // 获取指定group的详细信息
     protected def describeGroup(group: String) {
+      // 获取指定consumer group的详细信息
       val consumerSummaries = adminClient.describeConsumerGroup(group)
       if (consumerSummaries.isEmpty)
         println(s"Consumer group `${group}` does not exist or is rebalancing.")
       else {
+        // 获取KafkaConsumer
         val consumer = getConsumer()
         printDescribeHeader()
         consumerSummaries.foreach { consumerSummary =>
           val topicPartitions = consumerSummary.assignment.map(tp => TopicAndPartition(tp.topic, tp.partition))
+          // 调用KafkaConsumer.committed方法获取指定分区最近一次提交的offset
+          // 底层通过发送OffsetFetchRequest请求实现
           val partitionOffsets = topicPartitions.flatMap { topicPartition =>
             Option(consumer.committed(new TopicPartition(topicPartition.topic, topicPartition.partition))).map { offsetAndMetadata =>
               topicPartition -> offsetAndMetadata.offset
             }
           }.toMap
+          // 获取分区对应的LEO值，并将所有信息输出
           describeTopicPartition(group, topicPartitions, partitionOffsets.get,
             _ => Some(s"${consumerSummary.clientId}_${consumerSummary.clientHost}"))
         }

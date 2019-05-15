@@ -61,6 +61,7 @@ object ConsoleConsumer extends Logging {
     val consumer =
       if (conf.useNewConsumer) {
         val timeoutMs = if (conf.timeoutMs >= 0) conf.timeoutMs else Long.MaxValue
+        // 封装了KafkaConsumer对象
         new NewShinyConsumer(Option(conf.topicArg), Option(conf.whitelistArg), getNewConsumerProps(conf), timeoutMs)
       } else {
         checkZk(conf)
@@ -70,8 +71,10 @@ object ConsoleConsumer extends Logging {
     addShutdownHook(consumer, conf)
 
     try {
+      // 从服务端获取信息并输出
       process(conf.maxMessages, conf.formatter, consumer, conf.skipMessageOnError)
     } finally {
+      // 关闭KafkaConsumer以及清理ZK的相关操作
       consumer.cleanup()
       reportRecordCount()
 

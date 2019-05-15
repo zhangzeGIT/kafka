@@ -95,8 +95,10 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
 
   private var shutdownLatch = new CountDownLatch(1)
 
+  // 用于构成MBean名称的一部分
   private val jmxPrefix: String = "kafka.server"
   private val reporters: java.util.List[MetricsReporter] = config.metricReporterClasses
+  // 创建默认JmxReporter对象
   reporters.add(new JmxReporter(jmxPrefix))
 
   // This exists because the Metrics package from clients has its own Time implementation.
@@ -106,8 +108,8 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
   var metrics: Metrics = null
 
   private val metricConfig: MetricConfig = new MetricConfig()
-    .samples(config.metricNumSamples)
-    .timeWindow(config.metricSampleWindowMs, TimeUnit.MILLISECONDS)
+    .samples(config.metricNumSamples)// 设置sample的个数，默认是2
+    .timeWindow(config.metricSampleWindowMs, TimeUnit.MILLISECONDS)// 设置sample的时间
 
   val brokerState: BrokerState = new BrokerState
 
@@ -170,6 +172,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
 
       val canStartup = isStartingUp.compareAndSet(false, true)
       if (canStartup) {
+        // 创建metrics对象
         metrics = new Metrics(metricConfig, reporters, kafkaMetricsTime, true)
 
         brokerState.newState(Starting)

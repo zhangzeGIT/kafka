@@ -50,24 +50,31 @@ class NewShinyConsumer(topic: Option[String], whitelist: Option[String], consume
 
   import scala.collection.JavaConversions._
 
+  // 创建KafkaConsumer对象
   val consumer = new KafkaConsumer[Array[Byte], Array[Byte]](consumerProps)
+  // 订阅指定的topic
   if (topic.isDefined)
     consumer.subscribe(List(topic.get))
   else if (whitelist.isDefined)
+  // 未指定topic，则订阅白名单中指定的topic
     consumer.subscribe(Pattern.compile(whitelist.get), new NoOpConsumerRebalanceListener())
   else
+  // 未指定白名单，这抛异常
     throw new IllegalArgumentException("Exactly one of topic or whitelist has to be provided.")
 
+  // 初始化时，尝试从服务端获取消息
   var recordIter = consumer.poll(0).iterator
 
   override def receive(): BaseConsumerRecord = {
     if (!recordIter.hasNext) {
+      // 上次拉取的消息全部处理后，则继续从服务端拉取消息
       recordIter = consumer.poll(timeoutMs).iterator
       if (!recordIter.hasNext)
         throw new ConsumerTimeoutException
     }
 
     val record = recordIter.next
+    // 将消息封装成BaseConsumerRecord返回
     BaseConsumerRecord(record.topic,
                        record.partition,
                        record.offset,

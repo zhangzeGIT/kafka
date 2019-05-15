@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Performance test for the full zookeeper consumer
  */
+// 消费者的各项性能指标
 object ConsumerPerformance {
   private val logger = Logger.getLogger(getClass())
 
@@ -46,10 +47,14 @@ object ConsumerPerformance {
 
     val config = new ConsumerPerfConfig(args)
     logger.info("Starting consumer...")
+    // 从服务端拉取的消息数
     val totalMessagesRead = new AtomicLong(0)
+    // 获取消息的总字节数
     val totalBytesRead = new AtomicLong(0)
+    // consumer是否超时
     val consumerTimeout = new AtomicBoolean(false)
 
+    // 根据配合，决定输出抬头信息
     if (!config.hideHeader) {
       if (!config.showDetailedStats)
         println("start.time, end.time, data.consumed.in.MB, MB.sec, data.consumed.in.nMsg, nMsg.sec")
@@ -59,6 +64,7 @@ object ConsumerPerformance {
 
     var startMs, endMs = 0L
     if(config.useNewConsumer) {
+      // 创建KafkaConsumer
       val consumer = new KafkaConsumer[Array[Byte], Array[Byte]](config.props)
       consumer.subscribe(List(config.topic))
       startMs = System.currentTimeMillis
@@ -66,6 +72,7 @@ object ConsumerPerformance {
       endMs = System.currentTimeMillis
       consumer.close()
     } else {
+      // 旧版本consumer
       import kafka.consumer.ConsumerConfig
       val consumerConfig = new ConsumerConfig(config.props)
       val consumerConnector: ConsumerConnector = Consumer.create(consumerConfig)
@@ -91,20 +98,31 @@ object ConsumerPerformance {
     val elapsedSecs = (endMs - startMs) / 1000.0
     if (!config.showDetailedStats) {
       val totalMBRead = (totalBytesRead.get * 1.0) / (1024 * 1024)
+      // 输出测试过程的开始时间，结束时间，消费的总字节数，每秒拉取的字节数
+      // 每秒消费的消息条数以及消费的总消息数
       println(("%s, %s, %.4f, %.4f, %d, %.4f").format(config.dateFormat.format(startMs), config.dateFormat.format(endMs),
         totalMBRead, totalMBRead / elapsedSecs, totalMessagesRead.get, totalMessagesRead.get / elapsedSecs))
     }
   }
-  
+
+  // 开始测试之前会等待rebalance操作完成，之后通过KafkaConsumer.poll从服务端拉取消息并记录消息的大小
+  // 拉取时间等信息
+  // 只有间隔指定时间输出一次统计信息
+  // 更新totalMessagesRead和totalMessagesRead
   def consume(consumer: KafkaConsumer[Array[Byte], Array[Byte]], topics: List[String], count: Long, timeout: Long, config: ConsumerPerfConfig, totalMessagesRead: AtomicLong, totalBytesRead: AtomicLong) {
+    // 记录读取到的消息的总字节数
     var bytesRead = 0L
+    // 记录拉取消息的个数
     var messagesRead = 0L
     var lastBytesRead = 0L
     var lastMessagesRead = 0L
 
     // Wait for group join, metadata fetch, etc
+    // 等待rebalance操作完成的最长时间
     val joinTimeout = 10000
+    // 标识当前消费者是否已经分配了分区
     val isAssigned = new AtomicBoolean(false)
+    // 订阅topic，同时添加ConsumerRebalancceListener用来修改isAssigned的值
     consumer.subscribe(topics, new ConsumerRebalanceListener {
       def onPartitionsAssigned(partitions: util.Collection[TopicPartition]) {
         isAssigned.set(true)
@@ -113,34 +131,40 @@ object ConsumerPerformance {
         isAssigned.set(false)
       }})
     val joinStart = System.currentTimeMillis()
+    // 循环等待分区分配过程完成
     while (!isAssigned.get()) {
       if (System.currentTimeMillis() - joinStart >= joinTimeout) {
         throw new Exception("Timed out waiting for initial group join.")
       }
       consumer.poll(100)
     }
+    // 跳转消费者，从分区第一条消息开始消费
     consumer.seekToBeginning(List[TopicPartition]())
 
-    // Now start the benchmark
-    val startMs = System.currentTimeMillis
+    // Now start the benchmark 开始正式性能测试
+    val startMs = System.currentTimeMillis// 测试开始时间
     var lastReportTime: Long = startMs
-    var lastConsumedTime = System.currentTimeMillis
+    var lastConsumedTime = System.currentTimeMillis// 最后一次拉取消息时间
     
     while(messagesRead < count && System.currentTimeMillis() - lastConsumedTime <= timeout) {
       val records = consumer.poll(100)
       if(records.count() > 0)
         lastConsumedTime = System.currentTimeMillis
       for(record <- records) {
+        // 增加消费的总消息数量
         messagesRead += 1
         if(record.key != null)
-          bytesRead += record.key.size
+          bytesRead += record.key.size// 消费者的总字节数增加
         if(record.value != null)
+        // 增加消费者的总字节数
           bytesRead += record.value.size 
       
         if (messagesRead % config.reportingInterval == 0) {
           if (config.showDetailedStats)
             printProgressMessage(0, bytesRead, lastBytesRead, messagesRead, lastMessagesRead, lastReportTime, System.currentTimeMillis, config.dateFormat)
+          // 记录输出时间
           lastReportTime = System.currentTimeMillis
+          // 更新，供下次输出使用
           lastMessagesRead = messagesRead
           lastBytesRead = bytesRead
         }

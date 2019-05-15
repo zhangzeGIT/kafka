@@ -14,4 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TopicCommand方法是该脚本的入口函数
 exec $(dirname $0)/kafka-run-class.sh kafka.admin.TopicCommand "$@"

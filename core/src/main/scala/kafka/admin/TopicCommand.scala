@@ -39,8 +39,10 @@ object TopicCommand extends Logging {
 
   def main(args: Array[String]): Unit = {
 
+    // 解析参数，支持list，describe，create，alter，delete五种操作
     val opts = new TopicCommandOptions(args)
 
+    // 检测参数长度
     if(args.length == 0)
       CommandLineUtils.printUsageAndDie(opts.parser, "Create, delete, describe, or change a topic.")
 
@@ -55,9 +57,12 @@ object TopicCommand extends Logging {
                           30000,
                           30000,
                           JaasUtils.isZkSecurityEnabled())
+    // 根据输入的参数执行不同的操作
     var exitCode = 0
+    // listTopics和describeTopic方法主要从ZK中指定的路径查询Topic的信息，逻辑比较简单
     try {
       if(opts.options.has(opts.createOpt))
+        // create参数，创建topic
         createTopic(zkUtils, opts)
       else if(opts.options.has(opts.alterOpt))
         alterTopic(zkUtils, opts)
@@ -90,23 +95,38 @@ object TopicCommand extends Logging {
   }
 
   def createTopic(zkUtils: ZkUtils, opts: TopicCommandOptions) {
+    // 获取topic参数
     val topic = opts.options.valueOf(opts.topicOpt)
+    // 将config参数解析成Properties对象
     val configs = parseTopicConfigsToBeAdded(opts)
+    // 读取if-not-exists参数
     val ifNotExists = if (opts.options.has(opts.ifNotExistsOpt)) true else false
+    // 如果topic名称包含.或_字符，输出警告信息
     if (Topic.hasCollisionChars(topic))
       println("WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.")
     try {
+      // 检测是否有replica-assignment参数
       if (opts.options.has(opts.replicaAssignmentOpt)) {
+        // replica-assignment参数的格式类似：0:1:2,3:4:5，其中指定了编号为0的分区
+        // 有三个副本且分配在Broker0~2上，编号为1的分区由三个副本且分配在Broker3-5上，后面类似
+        // 这里replica-assignment参数内容解析成Map[Int,Seq[Int]]格式
+        // key为分区的编号，value是其副本所分配的brokerID
         val assignment = parseReplicaAssignment(opts.options.valueOf(opts.replicaAssignmentOpt))
         warnOnMaxMessagesChange(configs, assignment.valuesIterator.next().length)
+        // 对topic名称和副本分配结果进行一些列检测，并写入ZK中
         AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, topic, assignment, configs, update = false)
       } else {
+        // 如果进行副本自动分配，则必须指定partitions参数和replication-factor参数
         CommandLineUtils.checkRequiredArgs(opts.parser, opts.options, opts.partitionsOpt, opts.replicationFactorOpt)
+        // 获取partitions参数值和replication-factor参数值
         val partitions = opts.options.valueOf(opts.partitionsOpt).intValue
         val replicas = opts.options.valueOf(opts.replicationFactorOpt).intValue
+        // 检测maxMessageBytes参数
         warnOnMaxMessagesChange(configs, replicas)
+        // 根据disable-rack-aware参数决定分配副本时是否考虑机架信息
         val rackAwareMode = if (opts.options.has(opts.disableRackAware)) RackAwareMode.Disabled
                             else RackAwareMode.Enforced
+        // 自动分配副本，写入ZK
         AdminUtils.createTopic(zkUtils, topic, partitions, replicas, configs, rackAwareMode)
       }
       println("Created topic \"%s\".".format(topic))
@@ -116,13 +136,16 @@ object TopicCommand extends Logging {
   }
 
   def alterTopic(zkUtils: ZkUtils, opts: TopicCommandOptions) {
+    // 从ZK中获取与topic参数正则匹配的topic集合，这里并不会抛出内部topic
     val topics = getTopics(zkUtils, opts)
+    // 读取if-exists配置
     val ifExists = if (opts.options.has(opts.ifExistsOpt)) true else false
     if (topics.length == 0 && !ifExists) {
       throw new IllegalArgumentException("Topic %s does not exist on ZK path %s".format(opts.options.valueOf(opts.topicOpt),
           opts.options.valueOf(opts.zkConnectOpt)))
     }
     topics.foreach { topic =>
+      // 修改topic配置项信息的功能
       val configs = AdminUtils.fetchEntityConfig(zkUtils, ConfigType.Topic, topic)
       if(opts.options.has(opts.configOpt) || opts.options.has(opts.deleteConfigOpt)) {
         println("WARNING: Altering topic configuration from this script has been deprecated and may be removed in future releases.")
@@ -144,7 +167,9 @@ object TopicCommand extends Logging {
         println("WARNING: If partitions are increased for a topic that has a key, the partition " +
           "logic or ordering of the messages will be affected")
         val nPartitions = opts.options.valueOf(opts.partitionsOpt).intValue
+        // 获取replica-assignment参数的值
         val replicaAssignmentStr = opts.options.valueOf(opts.replicaAssignmentOpt)
+        // 调用方法完成分区数量的增加及副本分配
         AdminUtils.addPartitions(zkUtils, topic, nPartitions, replicaAssignmentStr)
         println("Adding partitions succeeded!")
       }

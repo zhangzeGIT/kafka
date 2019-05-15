@@ -34,7 +34,9 @@ import scala.collection.mutable
 
 object DumpLogSegments {
 
+  // 将指定的日志文件和索引文件中的内容打印到控制台，还可以实现验证索引文件的功能
   def main(args: Array[String]) {
+    // 验证并解析参数
     val parser = new OptionParser
     val printOpt = parser.accepts("print-data-log", "if set, printing the messages content when dumping data logs")
     val verifyOpt = parser.accepts("verify-index-only", "if set, just verify the index log without printing its content")
@@ -84,19 +86,28 @@ object DumpLogSegments {
       new DecoderMessageParser(keyDecoder, valueDecoder)
     }
 
+    // 当索引项在对应的日志文件中找不到对应的消息时，会将其记录到misMatchesForIndexFilesMap中
+    // 其中key为索引文件的绝对路径，value是索引文件中相对offset和消息的offset组成的元祖集合
     val misMatchesForIndexFilesMap = new mutable.HashMap[String, List[(Long, Long)]]
+    // 如果消息是未压缩的，则需要offset是连续的，若不连续，则记录到这个集合中
+    // 其中key为日志文件的绝对路径
+    // value是出现不连续消息的前后两个offset组成的元祖集合
     val nonConsecutivePairsForLogFilesMap = new mutable.HashMap[String, List[(Long, Long)]]
 
     for(arg <- files) {
+      // 处理命令参数指定的文件集合
       val file = new File(arg)
       if(file.getName.endsWith(Log.LogFileSuffix)) {
         println("Dumping " + file)
+        // 打印日志文件
         dumpLog(file, print, nonConsecutivePairsForLogFilesMap, isDeepIteration, maxMessageSize , messageParser)
       } else if(file.getName.endsWith(Log.IndexFileSuffix)) {
+        // 打印索引文件
         println("Dumping " + file)
         dumpIndex(file, indexSanityOnly, verifyOnly, misMatchesForIndexFilesMap, maxMessageSize)
       }
     }
+    // 遍历两个map，输出错误信息
     misMatchesForIndexFilesMap.foreach {
       case (fileName, listOfMismatches) => {
         System.err.println("Mismatches in :" + fileName)
@@ -116,17 +127,24 @@ object DumpLogSegments {
   }
 
   /* print out the contents of the index */
+  // 遍历索引文件，检测index中的索引项是否能再对应的日志文件中找到对应消息
+  // 根据verifyOnly参数决定是否打印索引项的内容
   private def dumpIndex(file: File,
                         indexSanityOnly: Boolean,
                         verifyOnly: Boolean,
                         misMatchesForIndexFilesMap: mutable.HashMap[String, List[(Long, Long)]],
                         maxMessageSize: Int) {
+    // 获取baseOffset
     val startOffset = file.getName().split("\\.")(0).toLong
+    // 获取对应的日志文件
     val logFile = new File(file.getAbsoluteFile.getParent, file.getName.split("\\.")(0) + Log.LogFileSuffix)
+    // 创建FileMessageSet
     val messageSet = new FileMessageSet(logFile, false)
     val index = new OffsetIndex(file, baseOffset = startOffset)
 
     //Check that index passes sanityCheck, this is the check that determines if indexes will be rebuilt on startup or not.
+    // 对索引文件简单的检测，例如，最后一个索引项的offset大于baseOffset
+    // 索引文件大小是8的倍数
     if (indexSanityOnly) {
       index.sanityCheck
       println(s"$file passed sanity check.")
@@ -134,10 +152,14 @@ object DumpLogSegments {
     }
 
     for(i <- 0 until index.entries) {
+      // 读取索引项
       val entry = index.entry(i)
+      // 获取一个分片FileMessageSet，分片的起始位置是索引项指定的位置
       val partialFileMessageSet: FileMessageSet = messageSet.read(entry.position, maxMessageSize)
+      // 从分片FileMessageSet中获取第一条消息
       val messageAndOffset = getIterator(partialFileMessageSet.head, isDeepIteration = true).next()
       if(messageAndOffset.offset != entry.offset + index.baseOffset) {
+        // 如果消息的offset与索引项的offset不匹配，则需要记录下来
         var misMatchesSeq = misMatchesForIndexFilesMap.getOrElse(file.getAbsolutePath, List[(Long, Long)]())
         misMatchesSeq ::=(entry.offset + index.baseOffset, messageAndOffset.offset)
         misMatchesForIndexFilesMap.put(file.getAbsolutePath, misMatchesSeq)
@@ -145,6 +167,7 @@ object DumpLogSegments {
       // since it is a sparse file, in the event of a crash there may be many zero entries, stop if we see one
       if(entry.offset == 0 && i > 0)
         return
+      // 输出索引项内容
       if (!verifyOnly)
         println("offset: %d position: %d".format(entry.offset + index.baseOffset, entry.position))
     }
@@ -234,48 +257,64 @@ object DumpLogSegments {
   }
 
   /* print out the contents of the log */
+  // 遍历日志文件并打印消息的相关信息
+  // 例如消息的offset，position，压缩方式，CRC校验码等
   private def dumpLog(file: File,
                       printContents: Boolean,
                       nonConsecutivePairsForLogFilesMap: mutable.HashMap[String, List[(Long, Long)]],
                       isDeepIteration: Boolean,
                       maxMessageSize: Int,
                       parser: MessageParser[_, _]) {
+    // 打印日志的baseOffset
     val startOffset = file.getName().split("\\.")(0).toLong
     println("Starting offset: " + startOffset)
+    // 创建FileMessageSet对象
     val messageSet = new FileMessageSet(file, false)
+    // 记录通过验证的字节数
     var validBytes = 0L
+    // 记录offset
     var lastOffset = -1l
     val shallowIterator = messageSet.iterator(maxMessageSize)
+    // 遍历日志文件中的消息
     for(shallowMessageAndOffset <- shallowIterator) { // this only does shallow iteration
+      // 根据deep-iteration参数以及消息是否压缩得到合适的迭代器
       val itr = getIterator(shallowMessageAndOffset, isDeepIteration)
       for (messageAndOffset <- itr) {
         val msg = messageAndOffset.message
 
+        // 记录上次循环处理的消息的offset
         if(lastOffset == -1)
           lastOffset = messageAndOffset.offset
         // If we are iterating uncompressed messages, offsets must be consecutive
         else if (msg.compressionCodec == NoCompressionCodec && messageAndOffset.offset != lastOffset +1) {
+          // 如果消息是未压缩的，则需要offset是连续的，若不连续，则需要进行记录
           var nonConsecutivePairsSeq = nonConsecutivePairsForLogFilesMap.getOrElse(file.getAbsolutePath, List[(Long, Long)]())
           nonConsecutivePairsSeq ::=(lastOffset, messageAndOffset.offset)
           nonConsecutivePairsForLogFilesMap.put(file.getAbsolutePath, nonConsecutivePairsSeq)
         }
         lastOffset = messageAndOffset.offset
 
+        // 输出消息的相关信息
         print("offset: " + messageAndOffset.offset + " position: " + validBytes + " isvalid: " + msg.isValid +
               " payloadsize: " + msg.payloadSize + " magic: " + msg.magic +
               " compresscodec: " + msg.compressionCodec + " crc: " + msg.checksum)
         if(msg.hasKey)
           print(" keysize: " + msg.keySize)
         if(printContents) {
+          // 解析消息
           val (key, payload) = parser.parse(msg)
+          // 输出消息的key
           key.map(key => print(s" key: ${key}"))
+          // 输出消息的value
           payload.map(payload => print(s" payload: ${payload}"))
         }
         println()
       }
+      // 记录通过验证，正常打印的字节数
       validBytes += MessageSet.entrySize(shallowMessageAndOffset.message)
     }
     val trailingBytes = messageSet.sizeInBytes - validBytes
+    // 当发现验证失败的消息时，输出提示消息
     if(trailingBytes > 0)
       println("Found %d invalid bytes at the end of %s".format(trailingBytes, file.getName))
   }

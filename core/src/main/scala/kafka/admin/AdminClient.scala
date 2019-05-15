@@ -40,22 +40,27 @@ class AdminClient(val time: Time,
                   val client: ConsumerNetworkClient,
                   val bootstrapBrokers: List[Node]) extends Logging {
 
+  // 同步发送请求的功能
   private def send(target: Node,
                    api: ApiKeys,
                    request: AbstractRequest): Struct = {
     var future: RequestFuture[ClientResponse] = null
 
+    // 调用ConsumerNetworkClient.send方法发送请求
     future = client.send(target, api, request)
+    // 阻塞等待响应
     client.poll(future)
 
+    // 根据响应是否成功，进行响应处理
     if (future.succeeded())
       return future.value().responseBody()
     else
       throw future.exception()
   }
 
+  // 向集群中已知的所有broker发送请求，任一broker成功响应后则返回
   private def sendAnyNode(api: ApiKeys, request: AbstractRequest): Struct = {
-    bootstrapBrokers.foreach {
+    bootstrapBrokers.foreach {// 遍历集群所有broker
       case broker =>
         try {
           return send(broker, api, request)
@@ -93,10 +98,12 @@ class AdminClient(val time: Time,
   }
 
   def listAllGroups(): Map[Node, List[GroupOverview]] = {
+    // 发送MetadataRequest请求获取集群中所有Broker的信息
     findAllBrokers.map {
       case broker =>
         broker -> {
           try {
+            // 发送ListGroupRequest并阻塞等待响应
             listGroups(broker)
           } catch {
             case e: Exception =>
@@ -122,14 +129,18 @@ class AdminClient(val time: Time,
   }
 
   def describeGroup(groupId: String): GroupSummary = {
+    // 查找GroupCoordinator
     val coordinator = findCoordinator(groupId)
     val responseBody = send(coordinator, ApiKeys.DESCRIBE_GROUPS, new DescribeGroupsRequest(List(groupId).asJava))
+    // 发送DescribeGroupsRequest
     val response = new DescribeGroupsResponse(responseBody)
     val metadata = response.groups().get(groupId)
+    // 检查metadata是否为空
     if (metadata == null)
       throw new KafkaException(s"Response from broker contained no metadata for group ${groupId}")
 
     Errors.forCode(metadata.errorCode()).maybeThrow()
+    // 解析GroupMetadata对象，并封装成GroupSummary
     val members = metadata.members().map { member =>
       val metadata = Utils.readBytes(member.memberMetadata())
       val assignment = Utils.readBytes(member.memberAssignment())
@@ -206,6 +217,7 @@ object AdminClient {
   def create(props: Map[String, _]): AdminClient = create(new AdminConfig(props))
 
   def create(config: AdminConfig): AdminClient = {
+    // 创建构造KSelector和NetworkClient需要的对象
     val time = new SystemTime
     val metrics = new Metrics(time)
     val metadata = new Metadata
@@ -234,6 +246,7 @@ object AdminClient {
       DefaultRequestTimeoutMs,
       time)
 
+    // 创建ConsumerNetworkClient
     val highLevelClient = new ConsumerNetworkClient(
       networkClient,
       metadata,
@@ -241,6 +254,7 @@ object AdminClient {
       DefaultRetryBackoffMs,
       DefaultRequestTimeoutMs)
 
+    // 创建AdminClient
     new AdminClient(
       time,
       DefaultRequestTimeoutMs,

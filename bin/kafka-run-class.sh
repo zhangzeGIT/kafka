@@ -14,17 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# 主要功能是设置CLASSPATH，进行JMX的相关配置，配置Log4j，指定存放日志
+# 和索引文件位置，检测JAVA_HOME环境变量，进行JVM的相关配置，决定是否后台启动
+
+# 检测参数并打印使用方法
 if [ $# -lt 1 ];
 then
   echo "USAGE: $0 [-daemon] [-name servicename] [-loggc] classname [opts]"
   exit 1
 fi
 
+# 检测INCLUDE_TEST_JARS变量是否为空
 if [ -z "$INCLUDE_TEST_JARS" ]; then
   INCLUDE_TEST_JARS=false
 fi
 
 # Exclude jars not necessary for running commands.
+# 定义函数should_include_file，其功能是检测CLASSPATH是否需要包含指定的文件
 regex="(-(test|src|scaladoc|javadoc)\.jar|jar.asc)$"
 should_include_file() {
   if [ "$INCLUDE_TEST_JARS" = true ]; then
@@ -38,8 +44,10 @@ should_include_file() {
   fi
 }
 
+# 获取脚本所在目录的上一层目录，即base_dir指向的根目录（$KAFKA_HOME）
 base_dir=$(dirname $0)/..
 
+# 检测并设置SCALA_VERSION,SCALA_BINARY_VERSION
 if [ -z "$SCALA_VERSION" ]; then
 	SCALA_VERSION=2.10.6
 fi
@@ -133,6 +141,8 @@ do
 done
 shopt -u nullglob
 
+# 检测$base_dir下的多个目录，根据should_include_file函数设置CLASSPATH
+# JMX的相关设置
 # JMX settings
 if [ -z "$KAFKA_JMX_OPTS" ]; then
   KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false  -Dcom.sun.management.jmxremote.ssl=false "
@@ -144,6 +154,7 @@ if [  $JMX_PORT ]; then
 fi
 
 # Log directory to use
+# 指定存放日志文件和索引文件的目录，默认是$KAFKA_HOME/logs
 if [ "x$LOG_DIR" = "x" ]; then
     LOG_DIR="$base_dir/logs"
 fi
@@ -166,6 +177,7 @@ if [ -z "$KAFKA_OPTS" ]; then
   KAFKA_OPTS=""
 fi
 
+# 检测是否以debug模式启动
 # Set Debug options if enabled
 if [ "x$KAFKA_DEBUG" != "x" ]; then
 
@@ -186,6 +198,7 @@ if [ "x$KAFKA_DEBUG" != "x" ]; then
     KAFKA_OPTS="$JAVA_DEBUG_OPTS $KAFKA_OPTS"
 fi
 
+# 检测java_home环境变量
 # Which java to use
 if [ -z "$JAVA_HOME" ]; then
   JAVA="java"
@@ -194,16 +207,18 @@ else
 fi
 
 # Memory options
+# 配置JVM内存
 if [ -z "$KAFKA_HEAP_OPTS" ]; then
   KAFKA_HEAP_OPTS="-Xmx256M"
 fi
 
 # JVM performance options
+# 对JVM进行一些优化配置
 if [ -z "$KAFKA_JVM_PERFORMANCE_OPTS" ]; then
   KAFKA_JVM_PERFORMANCE_OPTS="-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC -Djava.awt.headless=true"
 fi
 
-
+# 处理name，loggc，daemon三个参数
 while [ $# -gt 0 ]; do
   COMMAND=$1
   case $COMMAND in
@@ -228,6 +243,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# 调整JVM GC相关的参数
 # GC options
 GC_FILE_SUFFIX='-gc.log'
 GC_LOG_FILE_NAME=''
@@ -237,6 +253,7 @@ if [ "x$GC_LOG_ENABLED" = "xtrue" ]; then
 fi
 
 # Launch mode
+# 根据DAEMON_HOME的值，决定是否后台启动
 if [ "x$DAEMON_MODE" = "xtrue" ]; then
   nohup $JAVA $KAFKA_HEAP_OPTS $KAFKA_JVM_PERFORMANCE_OPTS $KAFKA_GC_LOG_OPTS $KAFKA_JMX_OPTS $KAFKA_LOG4J_OPTS -cp $CLASSPATH $KAFKA_OPTS "$@" > "$CONSOLE_OUTPUT_FILE" 2>&1 < /dev/null &
 else

@@ -28,6 +28,7 @@ trait BaseProducer {
   def close()
 }
 
+// 封装了KafkaProducer对象，完成发送功能
 @deprecated("This class has been deprecated and will be removed in a future release. " +
             "Please use org.apache.kafka.clients.producer.KafkaProducer instead.", "0.10.0.0")
 class NewShinyProducer(producerProps: Properties) extends BaseProducer {
@@ -42,6 +43,7 @@ class NewShinyProducer(producerProps: Properties) extends BaseProducer {
   override def send(topic: String, key: Array[Byte], value: Array[Byte]) {
     val record = new ProducerRecord[Array[Byte],Array[Byte]](topic, key, value)
     if(sync) {
+      // 同步发送
       this.producer.send(record).get()
     } else {
       this.producer.send(record,
