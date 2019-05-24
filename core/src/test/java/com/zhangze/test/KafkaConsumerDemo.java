@@ -17,8 +17,11 @@ public class KafkaConsumerDemo {
         // 自动提交offset，每次调用poll时，都会检测是否需要提交
         props.put("auto.commit.interval.ms", "1000");
         props.put("session.timeout.ms", "30000");
+        props.put("heartbeat.interval.ms", "2000");
         props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+
+        props.put("enable.auto.commit","true");
 
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
 
@@ -32,6 +35,13 @@ public class KafkaConsumerDemo {
                 for (ConsumerRecord<String, String> record : records){
                     System.out.printf("offset = %d, key = %s, value = %s\n", record.offset(), record.key(), record.value());
                 }
+                try {
+                    System.out.println("sleep");
+                    Thread.sleep(30000);
+                }catch (Exception e){
+                    e.printStackTrace();
+                }
+//                consumer.commitSync();
             }
         }finally {
             consumer.close();
