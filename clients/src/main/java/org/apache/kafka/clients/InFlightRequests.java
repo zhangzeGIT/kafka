@@ -83,9 +83,12 @@ final class InFlightRequests {
      * 
      * @param node Node in question
      * @return true iff we have no requests still being sent to the given node
+     * NetworkClient调用此方法是用于判断是否可以向指定Node发送请求的条件之一
      */
     public boolean canSendMore(String node) {
         Deque<ClientRequest> queue = requests.get(node);
+        // 如果队列头迟迟发送不出去，可能是网络连接有问题
+        // 队列头消息与对应KafkaChannel.send字段执行的是同一消息
         return queue == null || queue.isEmpty() ||
                (queue.peekFirst().request().completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }

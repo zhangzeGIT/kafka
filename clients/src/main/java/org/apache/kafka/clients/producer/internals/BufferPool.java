@@ -40,11 +40,17 @@ import org.apache.kafka.common.utils.Time;
  * prevents starvation or deadlock when a thread asks for a large chunk of memory and needs to block until multiple
  * buffers are deallocated.
  * </ol>
+ *
+ * 每个BufferPool只针对特定大小的ByteBuffer进行管理，对其他大小的ByteBuffer并不会缓存
+ * 我们会调整MemoryRecords的大小（RecordAccumulator.batchSize字段指定），使每个MemoryRecords可以缓存多条消息
+ * 当一条消息的字节数大于MemoryRecords时，就不会复用BufferPool中缓存的ByteBuffer，而是额外分配ByteBuffer,
+ * 使用之后，直接GC，经常出现这种情况，就需要考虑调整batchSize的配置了
  */
 public final class BufferPool {
 
     // 整个pool的大小
     private final long totalMemory;
+    // 每个ByteBuffer多大
     private final int poolableSize;
     private final ReentrantLock lock;
     // 缓存了指定大小的byte buffer
@@ -205,6 +211,7 @@ public final class BufferPool {
     /**
      * Attempt to ensure we have at least the requested number of bytes of memory for allocation by deallocating pooled
      * buffers (if needed)
+     * 为了让availableMemory > size， 从free队列不断释放ByteBuffer，知道availableMemory满足这次申请
      */
     private void freeUp(int size) {
         while (!this.free.isEmpty() && this.availableMemory < size)
@@ -218,6 +225,8 @@ public final class BufferPool {
      * @param buffer The buffer to return
      * @param size The size of the buffer to mark as deallocated, note that this maybe smaller than buffer.capacity
      *             since the buffer may re-allocate itself during in-place compression
+     *
+     * 释放byte buffer的大小是poolable size，放入free队列
      */
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();

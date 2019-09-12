@@ -47,6 +47,7 @@ public final class FutureRecordMetadata implements Future<RecordMetadata> {
         return false;
     }
 
+    // 通过countDownLaunch等待
     @Override
     public RecordMetadata get() throws InterruptedException, ExecutionException {
         this.result.await();

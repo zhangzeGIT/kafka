@@ -49,10 +49,13 @@ public final class RecordBatch {
     // 消息发送给此topic
     public final TopicPartition topicPartition;
     // 标识RecordBatch状态的Future对象
+    // RecordBatch中全部消息呗正常响应，或超时，或关闭生产者时，会调用ProduceRequestResult.done方法
+    // 将produceFuture标记为完成
+    // error字段区分异常完成还是正常完成
     public final ProduceRequestResult produceFuture;
     // 最后一次向RecordBatch追加消息的时间戳
     public long lastAppendTime;
-    // Thunk对象的集合
+    // Thunk对象的集合，每个消息都有一个回调，这个字段 可以理解为消息的回调对象队列
     private final List<Thunk> thunks;
     // 用来记录某消息在RecordBatch中的偏移量
     private long offsetCounter = 0L;

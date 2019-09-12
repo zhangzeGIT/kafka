@@ -54,6 +54,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * The accumulator uses a bounded amount of memory and append calls will block when that memory is exhausted, unless
  * this behavior is explicitly disabled.
+ * 至少有一个业务线程和sender线程同时操作，所以必须是线程安全的
+ * 有一个以TopicPartition为key的ConcurrentMap，每个value是ArrayDeque<RecordBatch>，这个集合不安全，操作加锁
+ *
+ * RecordAccumulator -->   RecordBatch  -->  MemoryRecords
+ *
+ * MemoryRecords才是消息最终存放的地方
  */
 public final class RecordAccumulator {
 
@@ -206,13 +212,14 @@ public final class RecordAccumulator {
                     free.deallocate(buffer);
                     return appendResult;
                 }
+                // 创建新的MemoryRecord和RecordBatch
                 MemoryRecords records = MemoryRecords.emptyRecords(buffer, compression, this.batchSize);
                 RecordBatch batch = new RecordBatch(tp, records, time.milliseconds());
                 // 步骤七：在新创建的RecordBatch中追加Record，并将其添加到batches集合中
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, callback, time.milliseconds()));
 
                 dq.addLast(batch);
-                // 步骤八：将创建爱你的RecordBatch追加到incomplete集合
+                // 步骤八：将创建的RecordBatch追加到incomplete集合
                 incomplete.add(batch);
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
             }
@@ -345,7 +352,9 @@ public final class RecordAccumulator {
                         long waitedTimeMs = nowMs - batch.lastAttemptMs;
                         long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
                         long timeLeftMs = Math.max(timeToWaitMs - waitedTimeMs, 0);
+                        // deque中有多个RecordBatch或是第一个RecordBatch满了
                         boolean full = deque.size() > 1 || batch.records.isFull();
+                        // 是否超时了
                         boolean expired = waitedTimeMs >= timeToWaitMs;
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
                         if (sendable && !backingOff) {
@@ -390,6 +399,7 @@ public final class RecordAccumulator {
      * @return A list of {@link RecordBatch} for each node specified with total size less than the requested maxSize.
      * 根据ready的node集合，获取要发送的消息，key是NodeID,value是发送的record batch集合
      * 生产者只关心topic，而发送时，只关心那个node
+     * 只从每个队列中取出一个RecordBatch放到ready集合中，防止饥饿
      */
     public Map<Integer, List<RecordBatch>> drain(Cluster cluster,
                                                  Set<Node> nodes,
@@ -486,6 +496,8 @@ public final class RecordAccumulator {
      * Are there any threads currently waiting on a flush?
      *
      * package private for test
+     *
+     *  是否有线程等待flush操作完成
      */
     boolean flushInProgress() {
         return flushesInProgress.get() > 0;

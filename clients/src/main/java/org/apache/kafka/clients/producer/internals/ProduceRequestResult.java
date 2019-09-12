@@ -31,6 +31,7 @@ public final class ProduceRequestResult {
 
     private final CountDownLatch latch = new CountDownLatch(1);
     private volatile TopicPartition topicPartition;
+    //服务端为此RecordBatch中第一条消息分配的offset
     private volatile long baseOffset = -1L;
     private volatile RuntimeException error;
 

@@ -84,6 +84,7 @@ public class Compressor {
     private final CompressionType type;
     // 提供压缩功能
     private final DataOutputStream appendStream;
+    // 写数据，并自动扩容
     private final ByteBufferOutputStream bufferStream;
     private final int initPos;
 
@@ -243,7 +244,7 @@ public class Compressor {
     }
 
     // the following two functions also need to be public since they are used in MemoryRecords.iteration
-
+    // 根据不同的压缩类型进行创建，处理ZIP，其他通过反射得到，可以在不使用的时候，减少依赖包
     public static DataOutputStream wrapForOutput(ByteBufferOutputStream buffer, CompressionType type, int bufferSize) {
         try {
             switch (type) {

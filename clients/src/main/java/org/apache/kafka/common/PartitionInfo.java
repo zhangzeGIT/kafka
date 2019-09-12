@@ -17,10 +17,15 @@ package org.apache.kafka.common;
  */
 public class PartitionInfo {
 
+    // topic的字符串名称
     private final String topic;
+    // partition的ID
     private final int partition;
+    // Leader副本所在节点的ID
     private final Node leader;
+    // 全部副本节点所在的节点信息
     private final Node[] replicas;
+    // 记录了ISR集合中所有副本所在的节点信息
     private final Node[] inSyncReplicas;
 
     public PartitionInfo(String topic, int partition, Node leader, Node[] replicas, Node[] inSyncReplicas) {

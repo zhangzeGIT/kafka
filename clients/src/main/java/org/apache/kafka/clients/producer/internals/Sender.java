@@ -168,6 +168,20 @@ public class Sender implements Runnable {
      * 
      * @param now
      *            The current POSIX time in milliseconds
+     * 1、从Metadata获取Kafka集群元数据
+     * 2、调用RecordAccumulator.ready方法，选取可以向哪些Node节点发送消息，返回ReadyCheckResult对象
+     * 3、如果ReadyCheckResult中标识有unknownLeadersExist，调用Metadata的requestUpdate方法，标记需要更新Kafka集群
+     * 4、针对ReadyCheckResult中readyNodes集合，循环调用NetworkClient.ready方法，目的是检查网络IO方面是否符合发送消息的条件
+     *     不符合条件的Node将会从readyNodes集合中删除
+     * 5、经过步骤四处理后的readyNodes集合，调用RecordAccumulator.drain方法，获取待发送的消息集合
+     * 6、调用RecordAccumulator.abortExpiredBatches方法处理RecordAccumulator中超时的消息
+     *      代码逻辑是，遍历RecordAccumulator中保存的全部RecordBatch，调用RecordBatch.maybeExpire方法进行处理
+     *      如果已超时，调用RecordBatch.done方法，其中会触发自定义Callback，并将RecordBatch从队列中移除
+     *      释放ByteBuffer空间
+     * 7、调用Sender.createProduceRequests方法将待发送的消息封装成ClientRequest
+     * 8、调用NetWorkClient.send方法，将ClientRequest写入KafkaChannel的send字段
+     * 9、调用NetWorkClient.poll方法，将KafkaChannel.send字段中保存的ClientRequest发送出去，同时，还会处理
+     *      服务端发回的响应，处理超时的请求，调用用户自定义Callback等
      */
     void run(long now) {
         Cluster cluster = metadata.fetch();
@@ -351,6 +365,12 @@ public class Sender implements Runnable {
 
     /**
      * Transfer the record batches into a list of produce requests on a per-node basis
+     * 将待发送的消息封装成ClientRequest，每一个node至多生成一个ClientRequest对象
+     * 1、将一个NodeId对应的RecordBatch集合，重新整理成produceRecordsByPartition(Map<TopicPartition, ByteBuffer>)
+     *    和recordsByPartition(Map<TopicPartition, RecordBatch>)两个集合
+     * 2、创建RequestSend，RequestSend是真正通过网络IO发送的对象，其格式符合上面描述的Produce Request协议
+     * 3、创建RequestCompletionHandler作为回调对象
+     * 4、将RequestSend对象和RequestCompletionHandler对象封装进ClientRequest对象中，并将其返回
      */
     private List<ClientRequest> createProduceRequests(Map<Integer, List<RecordBatch>> collated, long now) {
         List<ClientRequest> requests = new ArrayList<ClientRequest>(collated.size());
@@ -362,6 +382,7 @@ public class Sender implements Runnable {
 
     /**
      * Create a produce request from the given record batches
+     * destination是nodeID
      */
     private ClientRequest produceRequest(long now, int destination, short acks, int timeout, List<RecordBatch> batches) {
         // 注意：produceRecordsByPartitions和recordsByPartitions的value是不一样的，一个是byte buffer一个是record batch

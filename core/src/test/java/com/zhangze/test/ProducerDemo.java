@@ -1,10 +1,7 @@
 package com.zhangze.test;
 
-import kafka.Kafka;
-import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.clients.producer.*;
+import scala.Int;
 
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
@@ -18,11 +15,11 @@ public class ProducerDemo {
         boolean isAsync = args.length == 0 || !args[0].trim().equalsIgnoreCase("sync");
 
         // 环境变量添加，需要输入配置文件的路径
-        System.setProperty("java.security.auth.login.config", "D:/myConf/kafka_client_jaas.conf");
+//        System.setProperty("java.security.auth.login.config", "D:/myConf/kafka_client_jaas.conf");
         Properties properties = new Properties();
         // 权限验证参数
-        properties.put("security.protocol", "SASL_PLAINTEXT");
-        properties.put("sasl.mechanism", "PLAIN");
+//        properties.put("security.protocol", "SASL_PLAINTEXT");
+//        properties.put("sasl.mechanism", "PLAIN");
 
         // kafka
         properties.put("bootstrap.servers", "localhost:9092");
@@ -31,9 +28,10 @@ public class ProducerDemo {
         // 消息都是字节数组，可以配置序列化器
         properties.put("key.serializer", "org.apache.kafka.common.serialization.IntegerSerializer");
         properties.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-
+        // 设置interceptor，在发送之前和收到ACK返回之前执行
+        properties.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, "com.zhangze.test.StaticsInterceptor");
         // 生产者核心类，线程安全，多个线程可共享一个producer
-        KafkaProducer producer = new KafkaProducer<>(properties);
+        KafkaProducer<Integer, String> producer = new KafkaProducer<>(properties);
 
         // 消息key
         int messageNo = 1;
@@ -66,7 +64,7 @@ class DemoCallBack implements Callback {
     private final int key;
     private final String message;
 
-    public DemoCallBack(long startTime, int key, String message) {
+    DemoCallBack(long startTime, int key, String message) {
         this.startTime = startTime;
         this.key = key;
         this.message = message;

@@ -32,12 +32,13 @@ import org.slf4j.LoggerFactory;
  * 
  * Metadata is maintained for only a subset of topics, which can be added to over time. When we request metadata for a
  * topic we don't have any metadata for it will trigger a metadata update.
+ * 封装了Cluster对象，并保存Cluster数据的最后更新时间，版本号，是否需要更新等待信息
  */
 public final class Metadata {
 
     private static final Logger log = LoggerFactory.getLogger(Metadata.class);
 
-    // 两次发出更新cluster保存的元数据信息的最小时间差，默认100ms
+    // 两次发出更新cluster保存的元数据信息的最小时间差，默认100ms，防止网络更新过于频繁
     private final long refreshBackoffMs;
     // 没隔多久，更新一次，默认五分钟
     private final long metadataExpireMs;
@@ -47,15 +48,22 @@ public final class Metadata {
     private long lastRefreshMs;
     // 上一次成功更新的时间戳
     private long lastSuccessfulRefreshMs;
-    // 集群元数据信息
+
+
+    // 集群元数据信息（Node,TopicPartition,PartitionInfo这三个类封装了集群中的元数据）
+    // node代表一个节点
+    // TopicPartition标识一个topic的分区
+    // partitionInfo标识一个分区的详细信息
     private Cluster cluster;
+
+
     // 是否强制更新cluster，这是触发Sender线程更新集群元数据的条件之一
     private boolean needUpdate;
     // 记录当前已知的所有topic
     private final Set<String> topics;
     // 监听Metadata更新的监听器集合，更新cluster字段之前，会通知集合中的所有listener对象
     private final List<Listener> listeners;
-    // 是否需要更新全部topic的元数据
+    // 是否需要更新全部topic的元数据，一般情况，KafkaProducer只维护它用到的Topic的元数据
     private boolean needMetadataForAllTopics;
 
     /**
@@ -136,6 +144,7 @@ public final class Metadata {
         long remainingWaitMs = maxWaitMs;
         while (this.version <= lastVersion) {
             if (remainingWaitMs != 0)
+                // 主线程与sender通过wait/notify同步，更新元数据操作交给sender线程去完成
                 wait(remainingWaitMs);
             long elapsed = System.currentTimeMillis() - begin;
             if (elapsed >= maxWaitMs)

@@ -123,6 +123,7 @@ public class KafkaChannel {
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
         // 设置send字段
         this.send = send;
+        // 关注write事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 

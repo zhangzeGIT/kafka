@@ -286,6 +286,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
                     this.totalMemorySize,
                     this.compressionType,
+                    // 发送延迟毫秒数，即：当达到指定BATCH_SIZE_CONFIG，直接发送，当没有达到指定值的时候，延迟
+                    // 好处：可以减少发送请求的数量
+                    // 坏处：在没有负载的情况下，发送延迟增加指定毫秒
                     config.getLong(ProducerConfig.LINGER_MS_CONFIG),
                     retryBackoffMs,
                     metrics,
@@ -447,6 +450,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws SerializationException If the key or value are not valid objects given the configured serializers
      * @throws TimeoutException if the time taken for fetching metadata or allocating memory for the record has surpassed <code>max.block.ms</code>.
      *
+     * 实际是将消息放入RecordAccumulator暂存
      */
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
@@ -466,10 +470,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         try {
             // first make sure the metadata for the topic is available
             // 获取kafka集群信息，底层会唤醒send线程更新metadata中保存的kafka集群的元数据
+            // 只有partition信息为空的时候才会更新
             long waitedOnMetadataMs = waitOnMetadata(record.topic(), this.maxBlockTimeMs);
             long remainingWaitMs = Math.max(0, this.maxBlockTimeMs - waitedOnMetadataMs);
             byte[] serializedKey;
-            // 序列化key value
+            // 序列化key value，可参考StringSerializer和IntegerSerialize完成自定义Serializer
             try {
                 serializedKey = keySerializer.serialize(record.topic(), record.key());
             } catch (ClassCastException cce) {
@@ -485,7 +490,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer");
             }
-            // 为消息选择合适的分区
+            // 为消息选择合适的分区,record中指定了分区编号，就用指定的，没指定，也没key，则按照递增的counter取模，有key，则按照key的hash取模
             int partition = partition(record, serializedKey, serializedValue, metadata.fetch());
             int serializedSize = Records.LOG_OVERHEAD + Record.recordSize(serializedKey, serializedValue);
             ensureValidRecordSize(serializedSize);
@@ -618,6 +623,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * we need to set <code>retries=&lt;large_number&gt;</code> in our config.
      *
      * @throws InterruptException If the thread is interrupted while blocked
+     *
+     * 等待RecordAccumulator中所有消息发送完成，在刷新完成之前会阻塞调用的线程
      */
     @Override
     public void flush() {
@@ -634,6 +641,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     /**
      * Get the partition metadata for the give topic. This can be used for custom partitioning.
      * @throws InterruptException If the thread is interrupted while blocked
+     *
+     * 从Metadata中获取指定topic的分区信息
      */
     @Override
     public List<PartitionInfo> partitionsFor(String topic) {
@@ -663,6 +672,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * <p>
      *
      * @throws InterruptException If the thread is interrupted while blocked
+     *
+     * 设置close标识，等待RecordAccumulator中的消息清空，关闭sender线程
      */
     @Override
     public void close() {

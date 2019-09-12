@@ -21,7 +21,7 @@ public class KafkaConsumerDemo {
         props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
 
-        props.put("enable.auto.commit","true");
+//        props.put("enable.auto.commit","true");
 
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
 
@@ -41,7 +41,7 @@ public class KafkaConsumerDemo {
                 }catch (Exception e){
                     e.printStackTrace();
                 }
-//                consumer.commitSync();
+                consumer.commitSync();
             }
         }finally {
             consumer.close();

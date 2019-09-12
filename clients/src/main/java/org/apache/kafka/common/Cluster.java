@@ -26,16 +26,20 @@ import java.util.Set;
 
 /**
  * A representation of a subset of the nodes, topics, and partitions in the Kafka cluster.
+ * 类和方法都是私有的，保证不可被修改，线程安全
  */
 public final class Cluster {
 
     private final boolean isBootstrapConfigured;
     private final List<Node> nodes;
     private final Set<String> unauthorizedTopics;
+    // TopicPartition与PartitionInfo的映射关系
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
+    // topic名称和partitionInfo的映射关系
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
+    // brokerID和Node节点之间对应关系
     private final Map<Integer, Node> nodesById;
 
     /**

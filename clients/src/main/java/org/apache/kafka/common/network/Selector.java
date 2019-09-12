@@ -80,7 +80,7 @@ public class Selector implements Selectable {
     private static final Logger log = LoggerFactory.getLogger(Selector.class);
 
     private final java.nio.channels.Selector nioSelector;
-    // NodeId与KafkaChannel之间的映射关系
+    // NodeId与KafkaChannel之间的映射关系，生产者客户端与Node之间的网络连接
     private final Map<String, KafkaChannel> channels;
     // 已经完全发送出去的请求
     private final List<Send> completedSends;
