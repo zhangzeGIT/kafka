@@ -62,6 +62,8 @@ import scala.collection._
  * @param logDirs The directories where offset checkpoints reside
  * @param logs The pool of logs
  * @param time A way to control the passage of time
+  *
+  *             日志压缩功能
  */
 class LogCleaner(val config: CleanerConfig,
                  val logDirs: Array[File],
@@ -80,6 +82,7 @@ class LogCleaner(val config: CleanerConfig,
                                         time = time)
   
   /* the threads */
+  // 日志压缩的线程数
   private val cleaners = (0 until config.numThreads).map(new CleanerThread(_))
   
   /* a metric to track the maximum utilization of any thread's buffer in the last cleaning */

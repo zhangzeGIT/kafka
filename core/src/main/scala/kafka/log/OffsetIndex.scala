@@ -61,7 +61,9 @@ import kafka.common.InvalidOffsetException
   * @param baseOffset 日志文件中的第一个消息的offset
   * @param maxIndexSize
   */
-class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long, val maxIndexSize: Int = -1) extends Logging {
+class OffsetIndex(@volatile private[this] var _file: File,
+                  val baseOffset: Long,
+                  val maxIndexSize: Int = -1) extends Logging {
   
   private val lock = new ReentrantLock
   
@@ -79,7 +81,7 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
         if (maxIndexSize < 8)
           throw new IllegalArgumentException("Invalid max index size: " + maxIndexSize)
         // 根据maxIndexSize的值对索引文件进行扩容
-        // 扩容结果是小于maxIndexSize的 最大的8的整数
+        // 扩容结果是小于maxIndexSize的 最大的8的倍数
         raf.setLength(roundToExactMultiple(maxIndexSize, 8))
       }
 

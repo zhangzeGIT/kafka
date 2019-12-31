@@ -519,6 +519,10 @@ public class NetworkClient implements KafkaClient {
      *
      * @param responses The list of responses that completed with the disconnection
      * @param now The current time
+     * 对每个请求都创建clientResponse并添加到response列表中
+     * 这里创建的ClientResponse会标识此响应并不是服务端返回的正常响应，而是因为连接断开产生的
+     * 如果是Metadata更新请求的响应，则会调用MetadataUpdater中的maybeHandleDisconnection方法处理
+     *            最后将Metadata.needUpdate设置为true
      */
     //
     private void handleDisconnections(List<ClientResponse> responses, long now) {

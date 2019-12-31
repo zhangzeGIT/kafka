@@ -46,10 +46,11 @@ object RequestChannel extends Logging {
   case class Session(principal: KafkaPrincipal, clientAddress: InetAddress)
 
   // RequestChannel.Request对象
-  case class Request(processor: Int, connectionId: String, session: Session, private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
+  case class Request(processor: Int, connectionId: String, session: Session,
+                     private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
-    // 存在扩线程的比较和修改
+    // 存在跨线程的比较和修改
     @volatile var requestDequeueTimeMs = -1L
     @volatile var apiLocalCompleteTimeMs = -1L
     @volatile var responseCompleteTimeMs = -1L
@@ -104,7 +105,7 @@ object RequestChannel extends Logging {
       else
         null
 
-    // 解析完毕，将buffer置空
+    // 解析完毕，将buffer置空，help GC
     buffer = null
     private val requestLogger = Logger.getLogger("kafka.request.logger")
 

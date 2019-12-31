@@ -1030,7 +1030,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // if data is available already, e.g. from a previous network client poll() call to commit,
         // then just return it immediately
 
-        // 判断缓存中是否有消息
+        // 判断缓存中是否有消息,有消息，就不需要再sendFetches了
         if (!records.isEmpty())
             return records;
 

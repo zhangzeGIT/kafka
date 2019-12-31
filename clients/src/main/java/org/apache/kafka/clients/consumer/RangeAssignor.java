@@ -55,6 +55,14 @@ public class RangeAssignor extends AbstractPartitionAssignor {
         return res;
     }
 
+    /**
+     * 针对每个Topic，n = 分区数/消费者数量   m = 分区数%消费者数  前m个消费者每个分配n+1个分区，后面的分配n个
+     * 例如：10个分区，三个消费者   前一个分区分配4个，后面两个，分配三个
+     * @param partitionsPerTopic The number of partitions for each subscribed topic. Topics not in metadata will be excluded
+     *                           from this map.
+     * @param subscriptions Map from the memberId to their respective topic subscription
+     * @return
+     */
     @Override
     public Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
                                                     Map<String, List<String>> subscriptions) {

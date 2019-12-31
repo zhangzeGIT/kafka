@@ -7,6 +7,9 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import java.util.Arrays;
 import java.util.Properties;
 
+/**
+ * kafka消费者不是线程安全的
+ */
 public class KafkaConsumerDemo {
     public static void main(String[] args) {
         Properties props = new Properties();
@@ -35,12 +38,12 @@ public class KafkaConsumerDemo {
                 for (ConsumerRecord<String, String> record : records){
                     System.out.printf("offset = %d, key = %s, value = %s\n", record.offset(), record.key(), record.value());
                 }
-                try {
-                    System.out.println("sleep");
-                    Thread.sleep(30000);
-                }catch (Exception e){
-                    e.printStackTrace();
-                }
+//                try {
+//                    System.out.println("sleep");
+//                    Thread.sleep(30000);
+//                }catch (Exception e){
+//                    e.printStackTrace();
+//                }
                 consumer.commitSync();
             }
         }finally {

@@ -40,7 +40,8 @@ import java.util.concurrent.{ExecutionException, ExecutorService, Executors, Fut
 // logDirs：log目录集合，log.dirs项指定的多个目录，每个目录下可以创建多个Log，每次创建log时，选择log最少的目录
 // ioThread：为完成Log加载，每个log目录下分配指定的线程进行加载
 // scheduler：KafkaScheduler对象，用于执行周期任务的线程池
-
+// 启动了三个周期性的后台任务以及Cleaner线程（可能不止一个）
+// 分别是log-flusher任务，log-retention日志保留任务，recovery-point-checkpoint检查点刷新任务
 @threadsafe
 class LogManager(val logDirs: Array[File],
                  val topicConfigs: Map[String, LogConfig],
@@ -507,8 +508,8 @@ class LogManager(val logDirs: Array[File],
 
   /**
    * Delete any eligible logs. Return the number of segments deleted.
-    * 按照两个条件进行LogSegment清理工作
-    * 一个是LogSegment的存活时间，二是整个log的大小
+   * 按照两个条件进行LogSegment清理工作
+   * 一个是LogSegment的存活时间，二是整个log的大小
    */
   def cleanupLogs() {
     debug("Beginning log cleanup...")

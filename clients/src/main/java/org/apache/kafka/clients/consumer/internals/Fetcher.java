@@ -154,6 +154,7 @@ public class Fetcher<K, V> {
                                 long fetchOffset = request.fetchData().get(partition).offset;
                                 FetchResponse.PartitionData fetchData = entry.getValue();
                                 // 创建CompletedFetch，并缓存到completedFetches队列中
+                                // fetchedRecords将CompletedFetch中的消息进行解析，得到Record集合，修改position
                                 completedFetches.add(new CompletedFetch(partition, fetchOffset, fetchData, metricAggregator));
                             }
 
@@ -398,6 +399,9 @@ public class Fetcher<K, V> {
         }
     }
 
+    /**
+     * 在fetchedRecords方法中奖消息添加到drained集合中时，还更新TopicPartitionState的position字段
+     */
     private int append(Map<TopicPartition, List<ConsumerRecord<K, V>>> drained,
                        PartitionRecords<K, V> partitionRecords,
                        int maxRecords) {
@@ -420,10 +424,8 @@ public class Fetcher<K, V> {
                 List<ConsumerRecord<K, V>> partRecords = partitionRecords.take(maxRecords);
                 // 最后一个消息的offset
                 long nextOffset = partRecords.get(partRecords.size() - 1).offset() + 1;
-
                 log.trace("Returning fetched records at offset {} for assigned partition {} and update " +
                         "position to {}", position, partitionRecords.partition, nextOffset);
-
                 List<ConsumerRecord<K, V>> records = drained.get(partitionRecords.partition);
                 if (records == null) {
                     records = partRecords;

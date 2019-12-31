@@ -40,6 +40,7 @@ private[log] case object LogCleaningPaused extends LogCleaningState
  *  the LogCleaningAborted state. Once the cleaning task is aborted, the partition enters the LogCleaningPaused state.
  *  While a partition is in the LogCleaningPaused state, it won't be scheduled for cleaning again, until cleaning is
  *  requested to be resumed.
+  *  负责每个Log的压缩状态管理以及cleaner checkpoint信息维护和更新
  */
 private[log] class LogCleanerManager(val logDirs: Array[File], val logs: Pool[TopicAndPartition, Log]) extends Logging with KafkaMetricsGroup {
   

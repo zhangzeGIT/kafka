@@ -122,6 +122,9 @@ public class Compressor {
         return compressionRate;
     }
 
+    /**
+     * MemoryRecords写满，会调用close方法，完成offset，size，CRC32等字段的写入，之后可以发送到服务端了
+     */
     public void close() {
         try {
             appendStream.close();

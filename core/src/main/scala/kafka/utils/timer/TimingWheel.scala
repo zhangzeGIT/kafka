@@ -161,7 +161,7 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
       // Set the bucket expiration time
       // 整个时间轮表示的时间跨度是不变的，随着表针currentTime的后移，当前时间轮能处理时间段也在不断后移
       // 新来的TimerTaskEntry会复用原来已经清理过的
-      // TimerTaskList(bucket)，此时需要重置TimerTaskLIstanbul的到期时间，并将bucket重新添加到DelayQueue中
+      // TimerTaskList(bucket)，此时需要重置TimerTaskList的到期时间，并将bucket重新添加到DelayQueue中
       if (bucket.setExpiration(virtualId * tickMs)) {// 设置bucket的到期时间
         // The bucket needs to be enqueued because it was an expired bucket
         // We only need to enqueue the bucket when its expiration time has changed, i.e. the wheel has advanced

@@ -36,6 +36,7 @@ import java.util.TreeSet;
  * The assignment will be:
  * C0: [t0p0, t0p2, t1p1]
  * C1: [t0p1, t1p0, t1p2]
+ * 字典序排序之后轮训
  */
 public class RoundRobinAssignor extends AbstractPartitionAssignor {
 

@@ -99,6 +99,8 @@ public abstract class AbstractCoordinator implements Closeable {
     // 是否需要执行发送JoinGroupRequest请求前的准备操作
     private boolean needsJoinPrepare = true;
     // 是否重新发送JoinGroupRequest请求的条件之一
+    // 正常收到JoinGroupResponse，将此设置成false
+    // 收到异常SyncGroupResponse或HeartbeatResponse或消费这里开ConsumerGroup时执行，设置成true
     private boolean rejoinNeeded = true;
     // 服务端GroupCoordinator所在的node节点
     protected Node coordinator;
@@ -460,7 +462,8 @@ public abstract class AbstractCoordinator implements Closeable {
             Map<String, ByteBuffer> groupAssignment = performAssignment(joinResponse.leaderId(), joinResponse.groupProtocol(),
                     joinResponse.members());
 
-            // 创建并发送SyncGroupRequest
+            // 完成分区分配，进入Synchronizing Group State阶段，创建并发送SyncGroupRequest，follow的GroupAssignment为空
+            // request：分区分配结果  response：分配给当前消费者的分区
             SyncGroupRequest request = new SyncGroupRequest(groupId, generation, memberId, groupAssignment);
             log.debug("Sending leader SyncGroup for group {} to coordinator {}: {}", groupId, this.coordinator, request);
             return sendSyncGroupRequest(request);
@@ -694,11 +697,13 @@ public abstract class AbstractCoordinator implements Closeable {
     }
 
     private class HeartbeatCompletionHandler extends CoordinatorResponseHandler<HeartbeatResponse, Void> {
+        // 对client response进行解析，得到指定类型的响应
         @Override
         public HeartbeatResponse parse(ClientResponse response) {
             return new HeartbeatResponse(response.responseBody());
         }
 
+        // 对解析后的响应进行处理
         @Override
         public void handle(HeartbeatResponse heartbeatResponse, RequestFuture<Void> future) {
             sensors.heartbeatLatency.record(response.requestLatencyMs());

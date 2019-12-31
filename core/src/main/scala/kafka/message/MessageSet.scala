@@ -84,6 +84,7 @@ abstract class MessageSet extends Iterable[MessageAndOffset] {
   /**
    * Provides an iterator over the message/offset pairs in this set
    */
+  // 提供迭代器，顺序读取MessageSet中的消息
   def iterator: Iterator[MessageAndOffset]
   
   /**

@@ -58,6 +58,7 @@ import java.util.Set;
 
 /**
  * This class manages the coordination process with the consumer coordinator.
+ * KafkaConsumer中通过ConsumerCoordinator组件实现与服务端的GroupCoordinator交互
  */
 public final class ConsumerCoordinator extends AbstractCoordinator {
 
@@ -285,7 +286,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
-        // 反序列化及汇总操作
+        // 反序列化及汇总操作，得到ConsumerGroup中全部消费者订阅的Topic
         Set<String> allSubscribedTopics = new HashSet<>();
         Map<String, Subscription> subscriptions = new HashMap<>();
         for (Map.Entry<String, ByteBuffer> subscriptionEntry : allSubscriptions.entrySet()) {
@@ -364,7 +365,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Refresh the committed offsets for provided partitions.
-     * 发送OffsetFetchRequest请求，更新subscriptions
+     * 发送OffsetFetchRequest请求拉取最近提叫的offset集合，更新到subscriptions集合中
      */
     public void refreshCommittedOffsetsIfNeeded() {
         // 检查needsFetchCommittedOffsets
@@ -416,6 +417,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Ensure that we have a valid partition assignment from the coordinator.
+     * JoinGroup阶段
      */
     public void ensurePartitionAssignment() {
         // 步骤一：检测订阅类型
@@ -627,6 +629,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             return new OffsetCommitResponse(response.responseBody());
         }
 
+        /**
+         * 处理OffsetCommitResponse的入口
+         */
         @Override
         public void handle(OffsetCommitResponse commitResponse, RequestFuture<Void> future) {
             // 初始化操作

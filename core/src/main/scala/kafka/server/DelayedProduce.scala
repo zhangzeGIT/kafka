@@ -29,7 +29,10 @@ import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 
 import scala.collection._
 
+// responseStatus主要用于记录ProducerResponse中的错误码
 case class ProducePartitionStatus(requiredOffset: Long, responseStatus: PartitionResponse) {
+  // 是否正在等待ISR集合中其他副本与Leader副本同步requiredOffset之前的消息
+  // 如果ISR集合中所有副本已经完成了requiredOffset之前消息的同步，则此值被设置成false
   @volatile var acksPending = false
 
   override def toString = "[acksPending: %b, error: %d, startOffset: %d, requiredOffset: %d]"
@@ -92,9 +95,10 @@ class DelayedProduce(delayMs: Long,
    */
   // 实现了DO的tryComplete方法
   // 检测是否满足DP的执行条件，满足执行条件时调用forceComplete方法
-  // 只有ProducerRequest中涉及的所有分区都满足条件，DP才能最终执行
+  // 只有ProducerRequest中涉及的所有分区都满足条件，DP才能最终执行，也就是pending为false的时候
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
+    // 遍历produceMetadata中的所有分区状态
     produceMetadata.produceStatus.foreach {
       case (topicAndPartition, status) =>
       trace("Checking produce satisfaction for %s, current status %s"

@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Higher level consumer access to the network layer with basic support for futures and
  * task scheduling. This class is not thread-safe, except for wakeup().
+ * 对NetworkClient进行了封装
  */
 public class ConsumerNetworkClient implements Closeable {
     private static final Logger log = LoggerFactory.getLogger(ConsumerNetworkClient.class);
@@ -109,7 +110,6 @@ public class ConsumerNetworkClient implements Closeable {
      * @param request The request payload
      * @return A future which indicates the result of the send.
      */
-
     // 会将待发送的请求封装成ClientRequest，然后保存到unsent集合中等待发送
     public RequestFuture<ClientResponse> send(Node node,
                                               ApiKeys api,
@@ -243,7 +243,7 @@ public class ConsumerNetworkClient implements Closeable {
      */
     private void poll(long timeout, long now, boolean executeDelayedTasks) {
         // send all the requests we can send now
-
+        // 循环处理unsent中缓存的请求
         // 步骤一：检测发送条件，将请求放入KafkaChannel.send字段，待发送
         trySend(now);
 
@@ -270,7 +270,8 @@ public class ConsumerNetworkClient implements Closeable {
 
         // try again to send requests since buffer space may have been
         // cleared or a connect finished in the poll
-        // 步骤八：检测发送条件，重新设置KafkaChannel.send字段，并超时断线重连
+        // 步骤八：步骤三中调用NetworkClient.poll方法，在其中可能已经将KafkaChannel.send字段上的请求发送出去了
+        // 也可能已经新建了某些Node的网络连接，所以在此尝试trySend
         trySend(now);
 
         // fail requests that couldn't be sent if they have expired

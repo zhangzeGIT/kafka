@@ -51,8 +51,12 @@ import scala.util.control.{ControlThrowable, NonFatal}
 // 一个网卡一个Endpoint一个Acceptor
 // Acceptor接受并处理所有新连接
 //    Acceptor对应多个Processor线程
-// Processor对应多个Handler线程
+// 每个Acceptor对应多个Handler线程,Handler线程用于处理请求并将产生响应返回给Processor
 //    通过RequestChannel通信
+// processor线程读取到的请求存入requestQueue中，Handler线程从requestQueue队列中取出请求进行处理
+// Handler线程处理请求产生的响应会存放到Processor对应的responseQueue中
+// processor从其对应的responseQueue中取出响应发给客户端
+// requestQueue和responseQueue由RequestChannel保管，包含一个requestQueue和多个responseQueue
 class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time) extends Logging with KafkaMetricsGroup {
 
   // 服务器一般有多个网卡，可以配置多个IP，Kafka可以同时监听多个端口
@@ -373,7 +377,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
     serverChannel
   }
 
-  /*
+  /**
    * Accept a new connection
    * 实现对OP_ACCEPT事件的处理
    * 创建SocketChannel并将其交给Processor.accept处理
@@ -415,13 +419,13 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
 /**
  * Thread that processes all requests from a single connection. There are N of these running in parallel
  * each of which has its own selector
-  * 读取请求和写会响应操作
+  * 读取请求和写回响应操作
   * 不参与具体的业务逻辑处理
  */
 private[kafka] class Processor(val id: Int,
                                time: Time,
                                maxRequestSize: Int,
-                               requestChannel: RequestChannel,
+                               requestChannel: RequestChannel, // Processor与Handler线程之间传递数据的队列
                                connectionQuotas: ConnectionQuotas,
                                connectionsMaxIdleMs: Long,
                                protocol: SecurityProtocol,
@@ -583,7 +587,7 @@ private[kafka] class Processor(val id: Int,
         val req = RequestChannel.Request(processor = id, connectionId = receive.source, session = session, buffer = receive.payload, startTimeMs = time.milliseconds, securityProtocol = protocol)
         // 放入requestChannel.requestQueue队列等待处理
         requestChannel.sendRequest(req)
-        // 取消OP_READ事件
+        // 取消OP_READ事件，在发送响应之前，此连接不能再读取任何请求了
         selector.mute(receive.source)
       } catch {
         case e @ (_: InvalidRequestException | _: SchemaException) =>

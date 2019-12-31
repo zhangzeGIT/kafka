@@ -113,6 +113,7 @@ class ClientQuotaManager(private val config: ClientQuotaManagerConfig,
     try {
       clientSensors.quotaSensor.record(value)
       // trigger the callback immediately if quota is not violated
+      // 调用callback，即上面介绍的produceResponseCallback
       callback(0)
     } catch {
       case qve: QuotaViolationException =>

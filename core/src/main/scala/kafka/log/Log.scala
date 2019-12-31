@@ -153,6 +153,9 @@ class Log(val dir: File,
   def name  = dir.getName()
 
   /* Load the log segments from the log files on disk */
+  // 删除.delete和.cleaned文件，cleaned后缀的文件表示是在日志压缩过程中宕机的，是不明确的
+  // .delete是本来就要删除的
+  // .swap是在swap过程宕机的，保存了日志压缩后的完整消息
   private def loadSegments() {
     // create the log directory if it doesn't exist
     dir.mkdirs()
@@ -386,7 +389,7 @@ class Log(val dir: File,
       // 加锁
       lock synchronized {
 
-        // 判断师傅需要分配offset，默认是需要的
+        // 判断是否需要分配offset，默认是需要的
         if (assignOffsets) {
           // assign offsets to the message set
           // 获取nextOffsetMetadata记录的messageOffset字段，从此处开始向后分配offset
@@ -656,7 +659,7 @@ class Log(val dir: File,
    * @param predicate A function that takes in a single log segment and returns true iff it is deletable
    * @return The number of segments deleted
    */
-  // 对于非activeSegment和符合predicate条件的都会删除
+  // 对于非activeSegment且符合predicate条件的都会删除
   def deleteOldSegments(predicate: LogSegment => Boolean): Int = {
     lock synchronized {
       //find any segments that match the user-supplied predicate UNLESS it is the final segment

@@ -72,6 +72,9 @@ public class SubscriptionState {
 
     /* the list of topics the group has subscribed to (set only for the leader on join group completion) */
     // leader，记录所有消费者订阅的topic，follow只会记录自己的
+    // 自身订阅的topic添加到groupSubscribe
+    // Leader收到JoinGroupResponse时调用
+    // 其他消费者订阅的Topic删除
     private final Set<String> groupSubscription;
 
     /* the list of partitions the user has requested */
@@ -84,6 +87,10 @@ public class SubscriptionState {
 
     /* do we need to request a partition assignment from the coordinator? */
     // 是否需要进行一次分区分配
+    // 1、topic发生变化
+    // 2、使用USER_ASSIGNED，将此值设置成false
+    // 3、成功收到SyncGroupResponse中的分区分配结果时，此时Rebalance操作结束，设置成false
+    // 4、某些请求出现ILLEGAL_GENERATION异常，或是订阅的Topic出现了分区数量的变化
     private boolean needsPartitionAssignment;
 
     /* do we need to request the latest committed offsets from the coordinator? */

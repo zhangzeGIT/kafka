@@ -77,8 +77,11 @@ class KafkaScheduler(val threads: Int,
       if(isStarted)
         throw new IllegalStateException("This scheduler has already been started!")
       executor = new ScheduledThreadPoolExecutor(threads)
+      // 线程池关闭之后定时任务是否继续执行，默认false
       executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false)
+      // 线程池关闭之后是否继续执行delay任务，默认true，继续
       executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
+      // 默认都是守护线程
       executor.setThreadFactory(new ThreadFactory() {
                                   def newThread(runnable: Runnable): Thread = 
                                     Utils.newThread(threadNamePrefix + schedulerThreadId.getAndIncrement(), runnable, daemon)
@@ -95,10 +98,14 @@ class KafkaScheduler(val threads: Int,
         cachedExecutor.shutdown()
         this.executor = null
       }
+      // 硬编码，等待一天
       cachedExecutor.awaitTermination(1, TimeUnit.DAYS)
     }
   }
 
+  /**
+    * 将fun封装成runnable
+    */
   def schedule(name: String, fun: ()=>Unit, delay: Long, period: Long, unit: TimeUnit) = {
     debug("Scheduling task %s with initial delay %d ms and period %d ms."
         .format(name, TimeUnit.MILLISECONDS.convert(delay, unit), TimeUnit.MILLISECONDS.convert(period, unit)))
@@ -114,9 +121,10 @@ class KafkaScheduler(val threads: Int,
           trace("Completed execution of scheduled task '%s'.".format(name))
         }
       }
+      // 周期性处理任务
       if(period >= 0)
         executor.scheduleAtFixedRate(runnable, delay, period, unit)
-      else
+      else // 处理非周期任务
         executor.schedule(runnable, delay, unit)
     }
   }

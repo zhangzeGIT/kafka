@@ -95,6 +95,7 @@ abstract class DelayedOperation(override val delayMs: Long) extends TimerTask wi
    * Process for completing an operation; This function needs to be defined
    * in subclasses and will be called exactly once in forceComplete()
    */
+  // 具体的业务逻辑，在forceComplete方法中被调用
   // 整个生命周期只调用一次
   def onComplete(): Unit
 
@@ -134,6 +135,7 @@ object DelayedOperationPurgatory {
  * A helper purgatory class for bookkeeping delayed operations with a timeout, and expiring timed out operations.
  */
 // timeoutTimer：SystemTimer对象
+// 提供了管理DelayedOperation以及处理到期DelayedOperation的功能
 class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: String,
                                                        timeoutTimer: Timer,
                                                        brokerId: Int = 0,

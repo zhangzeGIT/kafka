@@ -47,7 +47,7 @@ import scala.collection.mutable.ArrayBuffer
 // channel：FileChannel类型，用于读写对应的日志文件
 // start和end：日志的分片，start和end表示分片的起始位置和结束位置
 // isSlice：Boolean类型，表示当前FileMessageSet是否为日志文件的分片
-// _size：FileMessageSet大小，单位是字节（并发写，所以是AtomicInteger）
+// _size：FileMessageSet大小，单位是字节（多个handler并发写，所以是AtomicInteger）
 @nonthreadsafe
 class FileMessageSet private[kafka](@volatile var file: File,
                                     private[log] val channel: FileChannel,
@@ -85,10 +85,11 @@ class FileMessageSet private[kafka](@volatile var file: File,
    * For windows NTFS and some old LINUX file system, set preallocate to true and initFileSize
    * with one value (for example 512 * 1024 *1024 ) can improve the kafka produce performance.
    * If it's new file and preallocate is true, end will be set to 0.  Otherwise set to Int.MaxValue.
+   * 此构造方法会创建一个非分片的FileMessageSet对象
    */
   def this(file: File, fileAlreadyExists: Boolean, initFileSize: Int, preallocate: Boolean) =
       this(file,
-        // 如果使用preallocate预分配，end会被初始化为0
+        // 如果使用preallocate预分配,能提高后续的写性能，end会被初始化为0，这是因为下次写的时候，就直接是从开头写的
         channel = FileMessageSet.openChannel(file, mutable = true, fileAlreadyExists, initFileSize, preallocate),
         start = 0,
         end = ( if ( !fileAlreadyExists && preallocate ) 0 else Int.MaxValue),
@@ -378,15 +379,16 @@ class FileMessageSet private[kafka](@volatile var file: File,
   // 将日志截断到targetSize大小
   def truncateTo(targetSize: Int): Int = {
     val originalSize = sizeInBytes
+    // 检测targetSize的有效性
     if(targetSize > originalSize || targetSize < 0)
       throw new KafkaException("Attempt to truncate log segment to " + targetSize + " bytes failed, " +
                                " size of this log segment is " + originalSize + " bytes.")
     if (targetSize < channel.size.toInt) {
-      channel.truncate(targetSize)
-      channel.position(targetSize)
-      _size.set(targetSize)
+      channel.truncate(targetSize)// 裁剪文件
+      channel.position(targetSize)// 移动position
+      _size.set(targetSize) // 修改size
     }
-    originalSize - targetSize
+    originalSize - targetSize // 返回裁剪掉的字节数
   }
 
   /**
@@ -425,22 +427,22 @@ object FileMessageSet
     // 根据mutable参数创建FileChannel是否可写
     if (mutable) {
       if (fileAlreadyExists)
-        new RandomAccessFile(file, "rw").getChannel()
+        new RandomAccessFile(file, "rw").getChannel
       else {
         // 进行文件预分配
         if (preallocate) {
           val randomAccessFile = new RandomAccessFile(file, "rw")
           randomAccessFile.setLength(initFileSize)
-          randomAccessFile.getChannel()
+          randomAccessFile.getChannel
         }
         else
         // 创建可读可写的FileChannel
-          new RandomAccessFile(file, "rw").getChannel()
+          new RandomAccessFile(file, "rw").getChannel
       }
     }
     else
     // 创建只读的FileChannel
-      new FileInputStream(file).getChannel()
+      new FileInputStream(file).getChannel
   }
 }
 
